@@ -270,6 +270,52 @@ source
 
 此时仍不应修改 agent 主流程。
 
+### Gate 1 结论（2026-09-25，已验证）
+
+以下结论基于对两仓源码的直接核验（关键行号为主会话实测），非仅子代理报告。
+
+A. 可直接映射字段（mosaic.Paper → paperseek PaperRecord）
+
+| MOSAIC Paper | PaperRecord 目标 | 说明 |
+|---|---|---|
+| title | title | 必填，唯一必填字段 |
+| authors: list[str] | names.authors: list[PaperAuthor(display_name=…)] | 纯字符串列表 → display_name |
+| year | source.publish_year | int/None 兼容 |
+| journal | source.source_title | |
+| volume / issue / pages | source.volume / source.issue / source.pages | PaperSource.pages 为 Any，str 可直入 |
+| doi | identifiers.doi | 经 normalize_doi（providers.py 已有） |
+| arxiv_id | identifiers.arxiv | |
+| openalex_id | identifiers.openalex | |
+| abstract | abstract | None → "" |
+| pdf_url | links.pdf | |
+| url | links.landing_page | |
+| citation_count | citations=[PaperCitation(db=paper.source or "unknown", count=…)] | count None → 0 |
+| source（来源名） | provider="federated"；原始来源名放 raw["mosaic_source"] | 保持 KnowledgeSeek 单 provider 语义 |
+| 整个 Paper | raw=paper.to_dict() | 供调试与还原 |
+
+B. 需要补充/丢弃的字段：PaperRecord 侧 identifiers.pmid/issn/eisbn 等、keywords、types、citing_articles 链接，MOSAIC Paper 不提供 → 留空。MOSAIC 的 pii（PaperRecord 无对应位）与 relevance_score（避免双重排序）丢弃，pii 可存 raw。KnowledgeSeek document_key()（doi→openalex→arxiv→semanticscholar→pmid→uid→title）与 MOSAIC Paper.uid（doi→arxiv→pii→title）优先级不同但兼容：adapter 只需填 identifiers，去重交给 KnowledgeSeek。
+
+C. 需要 adapter 的调用点（共 4 个，均已在两仓验证）：
+1. mosaic.source_registry.build_sources(cfg: dict) -> list[BaseSource] — cfg 为普通嵌套 dict（不需要 config.load()/tomli_w）；`{"sources": {key: {"enabled": bool, "api_key": …}}}`；未列出的 key 默认 enabled=True（实测确认），因此 profile 选择必须显式 disable 其余源或绕过 registry 直接实例化源类。实测：全 disable + 仅开 arxiv/crossref → 只建 2 个源。无 key 源经 available()=False 被 search_all 自动跳过。
+2. mosaic.search.search_all(sources, query, max_per_source=25, filters=None, errors=[], stats={}, parallel=True) -> list[Paper] — 逐源 try/except 失败隔离；stats 填 per_source/raw_total/unique/merged/after_filters；按 Paper.uid merge。只做 retrieve+merge，不做 ranking（sort_by_relevance 是独立入口，不调用）。
+3. mosaic.models.SearchFilters（year_from/year_to/authors/journal）— 第一版传 None（KnowledgeSeek 的过滤在 fusion 后），保留结构以备 Phase 7。
+4. Adapter 输出：ProviderSearchResult(metadata=SearchMetadata(total=len(papers), page=1, limit=…), hits=[PaperRecord…])，与 providers.py 各 provider 的返回完全同构。
+
+D. 可否直接依赖 mosaic-search：可以，但有两个约束：
+- mosaic pyproject requires-python >=3.11（其 config.py 用 tomllib）。但实测（本工作区 py3.10.11 venv，sys.path 直指 mosaic/）：models/services/search/source_registry 全部可导入并运行，federated 核心链路唯一第三方依赖是 httpx（已装）。未用到 config.load()/tomllib。→ Phase 8 打包时 `paperseek[federated]` extra 用 `mosaic-search; python_version >= "3.11"` marker，运行时 adapter 做可导入性探测即可。
+- pypi.org 当前不可达，无法在线安装；开发期用 sys.path 指向兄弟目录 mosaic/（已在集成测试中采用），发布依赖留待有网环境验证。
+
+E. 预计修改的 KnowledgeSeek 文件（全部 add-only）：
+- 新增 paperseek_core/integrations/__init__.py、mosaic_adapter.py（Phase 2）、mosaic_provider.py（Phase 3）
+- 新增 tests/test_mosaic_adapter.py、tests/test_mosaic_provider.py
+- paperseek_core/sources/metadata.py：SOURCE_METADATA 增 "federated" 条目 + list_source_metadata() 元组加 "federated"
+- paperseek_core/agent.py：__init__ elif 链加 `data_source == "federated"` 一行实例化 provider；_source_label() labels 加一项；_source_safe_query 对 federated 走默认 strip()（已满足，无需改）；_provider_search_lane 已有 `if self.provider:` 兜底分支，无需改
+- paperseek_core/config.py：SourceConfig/RuntimeConfig/build_runtime_config 加 federated 配置字段（profile、max_per_source）
+- paperseek/config.py（from_env）：加对应环境变量读取
+- paperseek/web_app.py：data_source 白名单来自 supported_source_ids()（自动包含），仅展示层零改或小改
+- pyproject.toml：Phase 8 加 [project.optional-dependencies] federated
+- 无需改 retrieval.py / results.py / 现有任何单源 provider
+
 ## 7. Phase 2 — 新建 MOSAIC Adapter，尚不接主流程
 
 ### 目标
@@ -862,3 +908,20 @@ Codex 每完成一个 Phase 都在这里追加：
 - 是否偏离计划：是（环境层面，非代码层面）——baseline 测试改在 py3.10 + LD_PRELOAD sqlite 垫片上运行，而非计划的独立 py3.11 环境；原因见上 2。集成代码路径不受影响。
 - commit：见本次 "docs: record Phase 0 baseline in implementation log"
 - 下一步：Phase 1 接口审计（两份只读审计已产出：MOSAIC 公开 API 已完成；KnowledgeSeek provider/agent wiring 审计重跑中），冻结集成边界。
+
+### Phase 1
+- 时间：2026-09-25
+- KnowledgeSeek SHA：8544fbe（feat/mosaic-federated-provider）
+- MOSAIC SHA：64b991927e5124c964a29f3103eb6b506c44e8d8（只读）
+- 修改文件：仅 docs/plans/2026-09-24-mosaic-federated-integration.md（新增 Gate 1 结论 + 本 Log 条目）；零代码改动
+- 测试：
+  - mosaic 核心在 py3.10 venv 下 sys.path 直指 mosaic/ 导入并运行验证：models/services/search/source_registry 全通过；build_sources 手工 cfg dict 实测（selective enable 生效；无 key 源 available()=False）
+  - KnowledgeSeek 侧关键调用点逐行核验：agent.py provider elif 链（536-557）、_provider_search_lane（1096-1112）、_call_provider_search（1126-1134，按签名自适应 kwargs）、_retrieve_candidates lane 装配（1319-1354）、metadata.py SOURCE_METADATA/list_source_metadata、config.py SourceConfig/RuntimeConfig、web_app/cli supported_source_ids() 校验链
+- 结果：Gate 1 满足——兼容性结论已写入计划第 6 节（字段映射表、4 个 adapter 调用点、依赖可行性、预计修改文件清单）
+- 发现的问题：
+  1. build_sources 对未列出的 source key 默认 enabled=True —— profile 必须显式 disable 非目标源，或 provider 绕过 registry 直接实例化源类。已写入结论 A/C。
+  2. mosaic requires-python>=3.11 名义约束 vs 实际 federated 核心链路 py3.10 可跑（不用 tomllib）——Phase 8 用环境 marker + 运行时探测双保险。
+  3. 子代理审计报告有部分函数名不准（如 _select_sources/search_sources 等并不存在），主会话已逐点实测纠正，Log 与 Gate 1 结论以实测为准。
+- 是否偏离计划：否
+- commit：见 "docs: add Phase 1 interface audit and Gate 1 conclusion"
+- 下一步：Phase 2 新建 paperseek_core/integrations/mosaic_adapter.py（纯 fixture 测试，不接主流程，不访问网络）。
