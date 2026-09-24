@@ -12,7 +12,7 @@ from urllib.parse import unquote_plus
 from tests.helpers import ROOT, read_text
 
 
-SOURCE_IDS = ["openalex", "arxiv", "semanticscholar", "pubmed", "googlescholar", "paperhub", "crossref", "wos"]
+SOURCE_IDS = ["openalex", "arxiv", "semanticscholar", "pubmed", "googlescholar", "paperhub", "crossref", "federated", "wos"]
 
 
 class SkillLauncherTest(unittest.TestCase):

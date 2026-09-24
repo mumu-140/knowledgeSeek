@@ -8,7 +8,7 @@ from paperseek.web_app import SearchRequest, _config_from_payload
 from tests.helpers import CONFIG_ENV_KEYS, temporary_env
 
 
-SOURCE_IDS = ["openalex", "arxiv", "semanticscholar", "pubmed", "googlescholar", "paperhub", "crossref", "wos"]
+SOURCE_IDS = ["openalex", "arxiv", "semanticscholar", "pubmed", "googlescholar", "paperhub", "crossref", "federated", "wos"]
 
 
 class WebAppTest(unittest.TestCase):

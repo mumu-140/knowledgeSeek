@@ -956,3 +956,29 @@ Codex 每完成一个 Phase 都在这里追加：
 - 是否偏离计划：轻微——search() 的 max_per_source 取 max(self.max_per_source, limit)，保证 KnowledgeSeek 侧 lane_limit 能透传到每源上限；ranking 边界保持：未调用 mosaic 的 sort_by_relevance/BM25。
 - commit：见 "feat: add MosaicFederatedProvider with source profiles and failure isolation"
 - 下一步：Phase 4 注册 "federated" 数据源到主流程（metadata.py SOURCE_METADATA、agent.py elif 分支、config 字段、web/cli 白名单自动生效），默认行为不变。
+
+### Phase 4
+- 时间：2026-09-25
+- KnowledgeSeek SHA：4fb891c →（本次 commit）
+- MOSAIC SHA：64b991927e5124c964a29f3103eb6b506c44e8d8（只读）
+- 修改文件：
+  - paperseek_core/sources/metadata.py（SOURCE_METADATA["federated"] + list_source_metadata 顺序元组）
+  - paperseek_core/agent.py（__init__ elif 分支 + _source_label 一项；query 生成走既有 `if self.provider:` 通用分支，_source_safe_query 走默认 strip，均零改动）
+  - paperseek_core/config.py（SourceConfig/RuntimeConfig/build_runtime_config 增 federated_profile、federated_max_per_source）
+  - paperseek/config.py（AgentConfig 字段 + from_env 读 FEDERATED_PROFILE/FEDERATED_MAX_PER_SOURCE）
+  - paperseek/cli.py（--federated-profile/--federated-max-per-source 参数；--source choices 自动含 federated）
+  - paperseek/web_app.py（两个请求模型字段 + FIELD_LABELS + _config_from_payload 透传；data_source 校验经 supported_source_ids() 自动放行）
+  - skills/paperseek/scripts/paperseek_skill_runtime.py（standalone 源清单加 federated 条目）
+  - tests/test_{cli_management,mcp_server,skill_launcher,source_metadata,web_app}.py（期望源列表加 "federated"，位置在 crossref 与 wos 之间）
+- 测试：
+  - 全量：208 passed, 1 skipped, 85 subtests（含 Gate 4 要求的 test_source_providers/test_source_prompts/test_retrieval/test_results/test_agent_api/test_cli_management/test_mcp_server/test_web_app/test_skill_launcher）
+  - CLI 冒烟：`python -m paperseek.cli sources --json` 输出含 federated（status=optional_dependency）
+  - 配置链路验证：SearchConfig(data_source='federated')+SourceConfig(federated_profile='cs') → build_runtime_config → MosaicFederatedProvider(profile=cs, 5 源) ✓
+  - 未装 mosaic 时 provider.search() 抛 MosaicNotInstalledError，报错含安装指引 ✓（原 source 全部不受影响，默认 data_source=openalex 未变）
+- 结果：Gate 4 满足
+- 发现的问题：
+  1. skills standalone runtime 内嵌一份与 metadata.py 重复的源清单——两处都加了 federated；这是仓库既有模式（非本次引入）。
+  2. 5 个测试文件硬编码期望源列表，加新源必须同步——已同步。
+- 是否偏离计划：否
+- commit：见 "feat: register federated data source across CLI, web, and skill surfaces"
+- 下一步：Phase 5 真实网络 smoke test（需网络可达环境；当前主机 pypi/外网受限，先探测出口，不行则记录阻塞并先做 Phase 8 打包准备）。

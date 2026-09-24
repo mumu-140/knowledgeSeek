@@ -28,6 +28,8 @@ class AgentConfig:
     pubmed_email: str = ""
     pubmed_tool: str = "paperseek"
     serper_api_key: str = ""
+    federated_profile: str = "general"
+    federated_max_per_source: int = 25
     llm_api_key: str = ""
     llm_provider: str = "openai"
     llm_api_type: str = ""
@@ -79,6 +81,8 @@ class AgentConfig:
             pubmed_email=os.environ.get("PUBMED_EMAIL", ""),
             pubmed_tool=os.environ.get("PUBMED_TOOL", "paperseek"),
             serper_api_key=os.environ.get("SERPER_API_KEYS", "") or os.environ.get("SERPER_API_KEY", ""),
+            federated_profile=os.environ.get("FEDERATED_PROFILE", "general"),
+            federated_max_per_source=_int_env("FEDERATED_MAX_PER_SOURCE", 25, minimum=1),
             llm_api_key=os.environ.get("LLM_API_KEY", ""),
             llm_provider=provider,
             llm_api_type=api_type,

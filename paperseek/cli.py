@@ -173,6 +173,8 @@ Environment variables:
     parser.add_argument("--pubmed-email", default=None, help="Email for PubMed E-utilities")
     parser.add_argument("--pubmed-tool", default=None, help="Tool name for PubMed E-utilities")
     parser.add_argument("--serper-key", default=None, help="Serper API key or key pool for Google Scholar")
+    parser.add_argument("--federated-profile", default=None, choices=["biomed", "cs", "general"], help="Source profile for federated retrieval (default: general)")
+    parser.add_argument("--federated-max-per-source", default=None, type=int, help="Max results per source for federated retrieval (default: 25)")
     parser.add_argument("--llm-model", default=None, help="LLM model name")
     parser.add_argument("--llm-base-url", default=None, help="Custom LLM API endpoint")
     parser.add_argument("--llm-max-tokens", type=int, default=None, help="Maximum LLM output tokens per request")
@@ -217,6 +219,10 @@ def _apply_search_args(config: AgentConfig, args) -> AgentConfig:
         config.pubmed_tool = args.pubmed_tool
     if args.serper_key:
         config.serper_api_key = args.serper_key
+    if getattr(args, "federated_profile", None):
+        config.federated_profile = args.federated_profile
+    if getattr(args, "federated_max_per_source", None):
+        config.federated_max_per_source = max(1, args.federated_max_per_source)
     if args.llm_key:
         config.llm_api_key = args.llm_key
     if args.llm_provider:

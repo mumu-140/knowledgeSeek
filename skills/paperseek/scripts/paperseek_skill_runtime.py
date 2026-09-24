@@ -252,6 +252,33 @@ SOURCE_METADATA = [
         "notes": [
             "Crossref abstracts are optional publisher metadata and are often missing.",
             "Use a mailto email for Crossref polite-pool requests.",
+            "Field/context hints are used only as bibliographic search context.",
+        ],
+    },
+    {
+        "id": "federated",
+        "display_name": "Federated multi-source (MOSAIC)",
+        "status": "optional_dependency",
+        "description": "Fan-out retrieval across multiple scholarly sources via the optional MOSAIC library.",
+        "api_key": "not_required",
+        "default": False,
+        "supports_abstracts": True,
+        "supports_citations": True,
+        "supports_citation_expansion": False,
+        "supports_pdf_links": True,
+        "supported_parameters": [
+            "federated_profile",
+            "federated_max_per_source",
+            "search_field",
+            "target_min",
+            "target_max",
+            "max_iterations",
+        ],
+        "required_config": [],
+        "optional_config": ["FEDERATED_PROFILE", "FEDERATED_MAX_PER_SOURCE"],
+        "notes": [
+            "Requires the optional 'mosaic' package; full searches need the installed PaperSeek package.",
+            "Profiles: biomed, cs, general; sources without API keys are skipped automatically.",
         ],
     },
     {

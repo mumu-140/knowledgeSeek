@@ -57,6 +57,8 @@ FIELD_LABELS = {
     "pubmed_email": "PubMed Email",
     "pubmed_tool": "PubMed Tool",
     "serper_api_key": "Serper API Key",
+    "federated_profile": "Federated Profile",
+    "federated_max_per_source": "Federated Max Per Source",
     "llm_api_key": "LLM API Key",
     "llm_api_type": "LLM API Type",
     "discipline_fields": "Discipline Fields",
@@ -79,6 +81,8 @@ class SearchRequest(BaseModel):
     pubmed_email: Optional[str] = ""
     pubmed_tool: Optional[str] = ""
     serper_api_key: Optional[str] = ""
+    federated_profile: Optional[str] = ""
+    federated_max_per_source: Optional[int] = None
     llm_api_key: Optional[str] = ""
     llm_provider: str = ""
     llm_api_type: str = ""
@@ -162,6 +166,8 @@ class DiagnosticRequest(BaseModel):
     pubmed_email: Optional[str] = ""
     pubmed_tool: Optional[str] = ""
     serper_api_key: Optional[str] = ""
+    federated_profile: Optional[str] = ""
+    federated_max_per_source: Optional[int] = None
     llm_api_key: Optional[str] = ""
     llm_provider: str = ""
     llm_api_type: str = ""
@@ -367,6 +373,8 @@ def _config_from_payload(payload: SearchRequest) -> AgentConfig:
     config.pubmed_email = payload.pubmed_email or getattr(config, "pubmed_email", "")
     config.pubmed_tool = payload.pubmed_tool or getattr(config, "pubmed_tool", "paperseek") or "paperseek"
     config.serper_api_key = payload.serper_api_key or getattr(config, "serper_api_key", "")
+    config.federated_profile = (payload.federated_profile or "").strip() or getattr(config, "federated_profile", "general")
+    config.federated_max_per_source = payload.federated_max_per_source or getattr(config, "federated_max_per_source", 25) or 25
     config.llm_api_key = payload.llm_api_key or config.llm_api_key
     config.llm_provider = payload_provider
     if payload.llm_api_type:

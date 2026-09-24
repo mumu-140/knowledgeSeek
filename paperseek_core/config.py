@@ -57,6 +57,8 @@ class SourceConfig:
     pubmed_email: str = ""
     pubmed_tool: str = "paperseek"
     serper_api_key: str = ""
+    federated_profile: str = "general"
+    federated_max_per_source: int = 25
 
 
 @dataclass
@@ -103,6 +105,8 @@ class RuntimeConfig:
     pubmed_email: str
     pubmed_tool: str
     serper_api_key: str
+    federated_profile: str
+    federated_max_per_source: int
 
 
 def build_runtime_config(
@@ -157,4 +161,6 @@ def build_runtime_config(
         pubmed_email=source.pubmed_email,
         pubmed_tool=source.pubmed_tool or "paperseek",
         serper_api_key=source.serper_api_key,
+        federated_profile=source.federated_profile or "general",
+        federated_max_per_source=source.federated_max_per_source or 25,
     )

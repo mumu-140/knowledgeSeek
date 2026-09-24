@@ -554,6 +554,14 @@ class PaperSeekAgent:
             self.provider = GoogleScholarSerperProvider(api_key=getattr(config, "serper_api_key", ""))
         elif self.data_source == "paperhub":
             self.provider = PaperHubProvider()
+        elif self.data_source == "federated":
+            from paperseek_core.integrations.mosaic_provider import MosaicFederatedProvider
+
+            self.provider = MosaicFederatedProvider(
+                profile=getattr(config, "federated_profile", ""),
+                max_per_source=getattr(config, "federated_max_per_source", 25),
+                email=getattr(config, "openalex_email", ""),
+            )
         else:
             wos_cfg = Configuration(api_key={"ClarivateApiKeyAuth": config.wos_api_key})
             self.documents_api = DocumentsApi(ApiClient(configuration=wos_cfg))
@@ -2159,6 +2167,7 @@ class PaperSeekAgent:
             "pubmed": "PubMed",
             "googlescholar": "Google Scholar",
             "paperhub": "Computer science top conferences",
+            "federated": "Federated multi-source retrieval",
         }
         return labels.get(self.data_source, self.data_source)
 
