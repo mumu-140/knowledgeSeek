@@ -844,3 +844,21 @@ Codex 每完成一个 Phase 都在这里追加：
 - 下一步：
 
 不要提前填写未执行阶段。
+
+### Phase 0
+- 时间：2026-09-25
+- KnowledgeSeek SHA：a4bcfe7059605105309838e1af2596eb20e373ec（branch feat/mosaic-federated-provider，工作树干净）
+- MOSAIC SHA：64b991927e5124c964a29f3103eb6b506c44e8d8（main，tag v1.5.5，工作树干净，只读）
+- 修改文件：仅本计划文档（Phase 0 记录）；代码零改动
+- 测试：
+  - KnowledgeSeek baseline：`LD_PRELOAD=$WS/.sqlite-fix/libsqlite3.so.0 $WS/.venv-knowledgeSeek/bin/python -m pytest -q`（在 knowledgeSeek/ 下）→ 178 passed, 1 skipped, 85 subtests passed（exit 0），日志 $WS/knowledgeSeek-baseline-pytest-py310.log
+  - MOSAIC baseline smoke（核心子集 tests/test_models.py, test_search.py, test_db.py, test_sources.py，同一 venv，`-o addopts=""` 去掉 pytest-cov 参数）→ 241 passed, 9 skipped（exit 0），日志 $WS/mosaic-baseline-pytest-py310.log
+  - $WS = /home/yangs/software/knowledgeSeek-mosaic-20260924
+- 结果：Gate 0 满足——两仓 SHA 已记录、工作树干净、feature branch 已建、baseline 可重复
+- 发现的问题：
+  1. 环境：conda py3.10.11 的 sqlite3 因系统 libsqlite3 3.7.17 过旧无法 import（sqlite3_trace_v2 未定义）。已用工作区本地 LD_PRELOAD 垫片（$WS/.sqlite-fix/libsqlite3.so.0，sqlite 3.45.3）解决，未改动任何系统文件。
+  2. pypi.org 不可达：原计划的服务器端 py3.11 独立环境（uv .venv-ks311）离线装包失败（cryptography/pydantic-core wheel 缺失），本轮退回 py3.10 venv + LD_PRELOAD。MOSAIC 官方 requires-python >=3.11，但本 smoke 子集在 3.10 下通过（未用 tomllib）；后续阶段如需 import mosaic.config 或完整依赖（httpx>=0.27 已满足），需在可达网络的环境重验。
+  3. MOSAIC 测试 addopts 含 --cov（pytest-cov 未装），跑其测试需 `-o addopts=""`；tests/test_services_errors_jobs.py 依赖 flask（未装），故 smoke 覆盖为核心四文件。
+- 是否偏离计划：是（环境层面，非代码层面）——baseline 测试改在 py3.10 + LD_PRELOAD sqlite 垫片上运行，而非计划的独立 py3.11 环境；原因见上 2。集成代码路径不受影响。
+- commit：见本次 "docs: record Phase 0 baseline in implementation log"
+- 下一步：Phase 1 接口审计（两份只读审计已产出：MOSAIC 公开 API 已完成；KnowledgeSeek provider/agent wiring 审计重跑中），冻结集成边界。
