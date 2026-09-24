@@ -925,3 +925,19 @@ Codex 每完成一个 Phase 都在这里追加：
 - 是否偏离计划：否
 - commit：见 "docs: add Phase 1 interface audit and Gate 1 conclusion"
 - 下一步：Phase 2 新建 paperseek_core/integrations/mosaic_adapter.py（纯 fixture 测试，不接主流程，不访问网络）。
+
+### Phase 2
+- 时间：2026-09-25
+- KnowledgeSeek SHA：fdb2a54 →（本次 commit）
+- MOSAIC SHA：64b991927e5124c964a29f3103eb6b506c44e8d8（只读，sys.path 引用）
+- 修改文件：新增 paperseek_core/integrations/__init__.py、paperseek_core/integrations/mosaic_adapter.py、tests/test_mosaic_adapter.py；零现有文件改动
+- 测试：
+  - tests/test_mosaic_adapter.py：无 mosaic 时 15 passed（duck-typed fixture + 缺依赖报错文案）；PYTHONPATH 指向兄弟 mosaic/ 时 14 passed + 1 skipped（真实 mosaic.models.Paper.from_dict 路径，skip 的是"未安装报错"用例）
+  - 全量回归：193 passed, 1 skipped, 85 subtests（基线 178 + 新增 15）
+- 结果：Gate 2 满足——adapter tests 通过、test_results/test_retrieval 不退化、agent.py 零改动、无新 ranking 逻辑
+- 发现的问题：
+  1. `import mosaic` 不自动加载 mosaic.models（包 __init__ 只含 __version__）——require_mosaic/mosaic_available 已改为 import mosaic.models，修正了 Gate 1 结论中"import mosaic 即可"的推断。
+  2. adapter 对 to_dict() 失败做容错（raw 置空），不中断转换。
+- 是否偏离计划：轻微——papers_to_provider_result 暂未在 metadata 中携带 stats/errors（保持与其它 provider 的 SearchMetadata 完全同构），per_source_stats/errors 参数仅保留接口位，实际消费在 Phase 3 provider 层。
+- commit：见 "feat: add optional MOSAIC adapter (Paper to PaperRecord mapping)"
+- 下一步：Phase 3 MosaicFederatedProvider（profile 选择 + search_all 封装 + 失败隔离，mock 测试）。
