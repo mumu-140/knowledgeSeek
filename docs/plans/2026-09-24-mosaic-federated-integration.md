@@ -941,3 +941,18 @@ Codex 每完成一个 Phase 都在这里追加：
 - 是否偏离计划：轻微——papers_to_provider_result 暂未在 metadata 中携带 stats/errors（保持与其它 provider 的 SearchMetadata 完全同构），per_source_stats/errors 参数仅保留接口位，实际消费在 Phase 3 provider 层。
 - commit：见 "feat: add optional MOSAIC adapter (Paper to PaperRecord mapping)"
 - 下一步：Phase 3 MosaicFederatedProvider（profile 选择 + search_all 封装 + 失败隔离，mock 测试）。
+
+### Phase 3
+- 时间：2026-09-25
+- KnowledgeSeek SHA：30f22bb →（本次 commit）
+- MOSAIC SHA：64b991927e5124c964a29f3103eb6b506c44e8d8（只读）
+- 修改文件：新增 paperseek_core/integrations/mosaic_provider.py、tests/test_mosaic_provider.py；零现有文件改动
+- 测试：
+  - tests/test_mosaic_provider.py：15 passed（Gate 3 全场景：多源成功/单源 timeout/单源 5xx/空源/同 DOI 合并/互补 metadata/mosaic 未安装/profile 含 unavailable 源（available() 过滤 + 全 unavailable 报 ProviderError）/空 query/profile 映射与回退/limit 截断/单 relevance lane）
+  - 真实 build_sources 配置 sanity（PYTHONPATH 指向 mosaic/，离线）：general profile → 恰好启用 openalex/semantic_scholar/crossref/doaj，显式 disable 其余 16 个 registry key
+  - 全量回归：208 passed, 1 skipped, 85 subtests（178 基线 + 15 adapter + 15 provider）
+- 结果：Gate 3 满足
+- 发现的问题：Gate 1 结论中"未列出 key 默认 enabled"的风险已在 provider 内消化——_build_sources 对全部 20 个 registry key 显式写 enabled 布尔，profile 外源不会再被意外拉起。
+- 是否偏离计划：轻微——search() 的 max_per_source 取 max(self.max_per_source, limit)，保证 KnowledgeSeek 侧 lane_limit 能透传到每源上限；ranking 边界保持：未调用 mosaic 的 sort_by_relevance/BM25。
+- commit：见 "feat: add MosaicFederatedProvider with source profiles and failure isolation"
+- 下一步：Phase 4 注册 "federated" 数据源到主流程（metadata.py SOURCE_METADATA、agent.py elif 分支、config 字段、web/cli 白名单自动生效），默认行为不变。
