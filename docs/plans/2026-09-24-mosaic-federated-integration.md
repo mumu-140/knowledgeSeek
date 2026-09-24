@@ -1,0 +1,846 @@
+# KnowledgeSeek × MOSAIC 最小侵入式联邦检索集成计划
+
+- 日期：2026-09-24
+- 状态：Proposed / ready for implementation
+- 目标仓库：mumu-140/knowledgeSeek
+- 参考仓库：szaghi/mosaic
+- 推荐实施分支：feat/mosaic-federated-provider
+
+## 1. 目标
+
+本计划不重构 PaperSeek/KnowledgeSeek，也不把 MOSAIC 整仓复制进来。
+
+目标是把两者已经成熟的模块按职责拼接：
+
+KnowledgeSeek 保留：
+- 自然语言研究问题理解
+- intent analysis
+- query generation / broaden / narrow
+- 学科判断与筛选
+- 现有 retrieval fusion（RRF + BM25 + term coverage + embedding）
+- citation expansion
+- reranker
+- LLM ranking
+- CLI / Web / MCP / Skill
+
+MOSAIC 复用：
+- 多数据库 source adapters
+- source registry
+- 多源并发 fan-out
+- source failure isolation
+- 跨源基础去重与 metadata merge
+- 后续可选的 cache / PDF / citation graph 能力
+
+第一阶段完成后，KnowledgeSeek 增加一个新的 federated / mosaic 数据源模式，但原有 OpenAlex、PubMed、Semantic Scholar、Crossref 等单源模式完全保留且默认行为不改变。
+
+核心原则：
+
+Question
+→ KnowledgeSeek 原有 intent / query
+→ MosaicFederatedProvider
+→ MOSAIC sources + concurrent retrieval + merge
+→ MOSAIC Paper → KnowledgeSeek PaperRecord
+→ KnowledgeSeek 原有 fuse_candidates_rrf()
+→ citation / reranker / LLM ranking
+→ result
+
+## 2. 非目标
+
+本轮明确不做：
+
+- 不重写 agent.py
+- 不替换 KnowledgeSeek 现有 provider
+- 不删除现有 OpenAlex / PubMed / Semantic Scholar / Crossref 实现
+- 不重写 MOSAIC source adapters
+- 不接入 MOSAIC Web UI
+- 不接入 NotebookLM
+- 不接入 Obsidian / Zotero
+- 不接入 MOSAIC 自己的 LLM ranking
+- 不在第一轮引入新的 RAG 架构
+- 不在第一轮引入新的数据库 schema
+- 不把现有 PaperRecord 改造成第三套 canonical model
+- 不为了集成而大规模调整 Python 版本或部署体系
+
+## 3. 工作区与执行规则
+
+建议将两个仓库放在同一工作区并保持兄弟目录：
+
+workspace/
+  knowledgeSeek/
+  mosaic/
+
+KnowledgeSeek 是唯一目标仓库。
+MOSAIC 第一阶段视为只读参考与依赖来源，不直接修改其源码。
+
+本地与服务器职责建议：
+
+本地：
+- clone / pull
+- 阅读源码
+- 设计
+- 编辑代码
+- git diff / commit / push
+
+服务器或独立测试环境：
+- Python 3.11+ 的 MOSAIC 集成测试
+- dependency install
+- 完整测试
+- 网络真实检索
+- benchmark
+- Web/CLI smoke test
+
+不要在已有生产环境中直接试验。
+不要覆盖用户已有配置、数据库、缓存或密钥。
+不要打印 API key、token、cookie 或其他认证材料。
+
+所有工作必须在 feature branch 中完成，主分支只在最终审核后合并。
+
+## 4. 强制执行节奏
+
+每个阶段都必须遵循同一闭环：
+
+1. 明确该阶段只解决一个问题。
+2. 先读相关代码和测试。
+3. 写或补充测试契约。
+4. 实现最小改动。
+5. 运行阶段相关测试。
+6. 运行必要的回归测试。
+7. git diff 审查。
+8. 检查是否扩大范围、重复实现已有能力或破坏兼容性。
+9. 更新本计划底部的 Implementation Log。
+10. 形成一个小 commit。
+11. 只有本阶段通过后才能进入下一阶段。
+
+如果测试失败：
+- 先定位并修复当前阶段；
+- 不通过绕过测试继续推进；
+- 不因为一个失败就重构无关模块。
+
+## 5. Phase 0 — 拉取、冻结基线、建立可回退起点
+
+### 目标
+
+确保 KnowledgeSeek 与 MOSAIC 都处于明确版本，并证明 KnowledgeSeek 原始主流程在改动前可用。
+
+### 操作
+
+在本地和测试服务器分别：
+
+1. clone 或 pull mumu-140/knowledgeSeek。
+2. clone 或 pull szaghi/mosaic。
+3. 记录两个仓库：
+   - remote URL
+   - branch
+   - HEAD SHA
+   - git status
+4. KnowledgeSeek 创建：
+   feat/mosaic-federated-provider
+5. MOSAIC 保持只读，不创建功能改动。
+6. 在服务器建立独立 Python 环境。
+7. 运行 KnowledgeSeek 当前完整测试。
+8. 如条件允许，运行 MOSAIC 自身核心测试，确认参考版本健康。
+
+### 输出
+
+记录至少：
+
+- KNOWLEDGESEEK_BASE_SHA
+- MOSAIC_BASE_SHA
+- Python version
+- KnowledgeSeek baseline test result
+- MOSAIC baseline smoke result
+
+### Gate 0
+
+必须满足：
+
+- KnowledgeSeek 工作树干净
+- 已创建 feature branch
+- baseline tests 可重复
+- 两个基线 SHA 已记录
+
+未满足不得进入 Phase 1。
+
+## 6. Phase 1 — 接口审计与最小集成边界冻结
+
+### 目标
+
+不写业务代码，先确认两边真正需要连接的接口。
+
+### KnowledgeSeek 重点阅读
+
+- paperseek_core/agent.py
+- paperseek_core/retrieval.py
+- paperseek_core/results.py
+- paperseek_core/sources/providers.py
+- paperseek_core/sources/metadata.py
+- paperseek_core/config.py
+- tests/test_retrieval.py
+- tests/test_source_providers.py
+- tests/test_source_prompts.py
+- tests/test_results.py
+
+### MOSAIC 重点阅读
+
+- mosaic/models.py
+- mosaic/source_registry.py
+- mosaic/search.py
+- mosaic/services.py
+- mosaic/sources/base.py
+- mosaic/sources/*
+- 必要时查看 config，但暂不接入其 UI/RAG。
+
+### 需要冻结的接口
+
+A. 输入边界
+
+KnowledgeSeek 交给 MOSAIC：
+- query
+- max results
+- source profile / selected sources
+- year / author / journal 等能直接映射的 filter
+- optional API configuration
+
+B. 输出边界
+
+MOSAIC 返回 Paper。
+Adapter 转成 KnowledgeSeek 已有 PaperRecord / ProviderSearchResult。
+
+C. 字段映射
+
+至少确认：
+
+MOSAIC Paper.title
+→ PaperRecord.title
+
+authors
+→ PaperNames.authors
+
+year
+→ PaperSource.publish_year
+
+journal
+→ PaperSource.source_title
+
+doi
+→ PaperIdentifiers.doi
+
+arxiv_id
+→ PaperIdentifiers.arxiv
+
+openalex_id
+→ PaperIdentifiers.openalex
+
+abstract
+→ PaperRecord.abstract
+
+pdf_url
+→ PaperLinks.pdf
+
+url
+→ PaperLinks.landing_page / record
+
+citation_count
+→ PaperCitation / KnowledgeSeek 当前引用数语义
+
+source
+→ provider / source metadata
+
+### 关键决策
+
+优先采用“依赖 + adapter”，而不是复制 MOSAIC 源码。
+
+只有以下情况确认存在时，才允许 vendor 极少数纯 Python 核心模块：
+
+- mosaic-search 作为可选依赖无法稳定部署；
+- Python 版本或 packaging 产生不可接受冲突；
+- 需要的接口无法从公开模块稳定调用。
+
+即使 vendor，也只允许提取最小模块并保留来源、版本与许可证说明，不得复制整个 MOSAIC。
+
+### Gate 1
+
+形成一份简短兼容性结论：
+
+- 可直接映射字段
+- 需要补充的字段
+- 需要 adapter 的调用点
+- 是否可直接依赖 mosaic-search
+- 预计修改的 KnowledgeSeek 文件
+
+此时仍不应修改 agent 主流程。
+
+## 7. Phase 2 — 新建 MOSAIC Adapter，尚不接主流程
+
+### 目标
+
+先解决“数据结构兼容”，与网络、LLM、agent 解耦。
+
+### 建议新增
+
+paperseek_core/integrations/
+  __init__.py
+  mosaic_adapter.py
+
+tests/
+  test_mosaic_adapter.py
+
+### mosaic_adapter.py 第一版职责
+
+只做：
+
+- 可选 import MOSAIC
+- MOSAIC availability check
+- Mosaic Paper → PaperRecord
+- list[Paper] → ProviderSearchResult
+- source / error / stats 的轻量映射
+
+不要在这里做：
+
+- ranking
+- RRF
+- embedding
+- LLM
+- citation expansion
+- query generation
+
+### Optional dependency
+
+优先把 MOSAIC 作为 optional extra，而不是 KnowledgeSeek 基础依赖。
+
+目标语义：
+
+- 普通 KnowledgeSeek 仍支持当前 Python / 当前安装方式。
+- federated MOSAIC 模式只在满足 MOSAIC Python 环境时启用。
+- 未安装 MOSAIC 时，原功能完全不受影响。
+- 用户显式选择 federated 时才给出清晰的 dependency error。
+
+### 测试
+
+全部使用构造出的 MOSAIC Paper fixture，不访问网络。
+
+覆盖：
+
+- DOI paper
+- arXiv paper
+- OpenAlex paper
+- 无 DOI paper
+- 缺 abstract
+- 缺 authors
+- OA PDF
+- citation count
+- Unicode title
+- duplicated identifiers
+
+### Gate 2
+
+必须满足：
+
+- adapter tests 全部通过
+- 原 test_results / test_retrieval 不退化
+- agent.py 尚未被大改
+- 未引入新的 ranking 逻辑
+
+形成独立 commit。
+
+## 8. Phase 3 — MosaicFederatedProvider
+
+### 目标
+
+把 MOSAIC 多源检索能力封装成 KnowledgeSeek 可以调用的一个 provider。
+
+### 建议实现
+
+在 integrations/mosaic_adapter.py 或独立：
+
+paperseek_core/integrations/mosaic_provider.py
+
+提供：
+
+MosaicFederatedProvider
+
+其职责：
+
+1. 接收 query。
+2. 根据 source profile 选择 MOSAIC sources。
+3. 调用 MOSAIC build_sources / search_all 或等价公开接口。
+4. 收集：
+   - per_source count
+   - raw_total
+   - unique
+   - merged
+   - errors
+5. 把 Paper 转换为 PaperRecord。
+6. 返回 KnowledgeSeek 已有结果类型。
+
+### 默认 source profile
+
+不要默认启动 MOSAIC 所有数据库。
+
+建议第一版：
+
+biomed:
+- PubMed
+- Europe PMC
+- PubMed Central
+- OpenAlex
+- Semantic Scholar
+- bioRxiv/medRxiv
+- Crossref
+
+cs:
+- OpenAlex
+- Semantic Scholar
+- arXiv
+- DBLP
+- Crossref
+- IEEE（仅在 key 可用时）
+
+general:
+- OpenAlex
+- Semantic Scholar
+- Crossref
+- DOAJ
+
+注意：
+- 缺 API key 的源应自动跳过或明确标记 unavailable。
+- 一个 source 失败不能导致整次 federated search 失败。
+- 第一版优先使用 keyless / 稳定数据源。
+
+### Ranking 边界
+
+MOSAIC 只负责：
+
+retrieve
+→ merge
+→ Paper list
+
+不要调用 MOSAIC 的 BM25 / semantic rank / LLM rank。
+
+返回 KnowledgeSeek 后继续使用：
+
+fuse_candidates_rrf()
+→ external embedding/reranker
+→ LLM rank
+
+避免双重排序。
+
+### Gate 3
+
+mock source 测试需要覆盖：
+
+- 多源均成功
+- 一个源 timeout
+- 一个源 429/5xx
+- 一个源返回空
+- 两个源返回同 DOI
+- 两个源 metadata 互补
+- MOSAIC 未安装
+- profile 中包含 unavailable source
+
+通过后形成独立 commit。
+
+## 9. Phase 4 — 接回 KnowledgeSeek 主流程
+
+### 目标
+
+把 federated provider 注册到现有 source 体系中，但不改变默认行为。
+
+### 原则
+
+新增：
+- federated
+或
+- mosaic
+
+作为一个新的数据源选项。
+
+不要改变：
+- 默认 OpenAlex
+- 原有 source-specific query 生成
+- 原有单源 provider 行为
+- 原有 CLI 参数语义
+- 原有 Web / MCP 兼容性
+
+### 第一版 query 策略
+
+为了最小改动：
+
+Question
+→ 原有 intent analysis
+→ 生成一个适合 federated retrieval 的普通文本 query
+→ MosaicFederatedProvider
+→ 多源 fan-out
+
+不要在第一版立即重构 agent 为“每个 MOSAIC source 一套不同 query”。
+
+已有单源模式仍继续使用当前：
+- OpenAlex-specific prompt
+- PubMed-specific prompt
+- Semantic Scholar-specific prompt
+- Crossref-specific prompt
+等。
+
+### 返回后
+
+MOSAIC candidate pool 统一进入 KnowledgeSeek 已有 retrieval fusion。
+
+第一版可把 federated pool 视作 relevance lane。
+不要为了给不同源造 lane 而扩大改动。
+
+### Gate 4
+
+必须运行：
+
+- 新 federated provider tests
+- test_source_providers
+- test_source_prompts
+- test_retrieval
+- test_results
+- test_agent_api
+- test_cli_management
+- test_mcp_server
+- test_web_app
+- full test suite
+
+并检查：
+
+- 未选择 federated 时结果与旧逻辑一致
+- federated source 选项可被 CLI / API 正确识别
+- source failure 有可观察日志
+- history / export 不因新 provider 结构损坏
+
+通过后形成独立 commit。
+
+## 10. Phase 5 — 真实网络 smoke test
+
+### 目标
+
+证明真实多源流程能运行，而不仅是 mock 单元测试通过。
+
+### 测试要求
+
+在服务器独立环境进行。
+
+至少测试：
+
+1. 精确题名型查询
+2. 普通主题型查询
+3. 较窄生物学主题
+4. 同义词较多的主题
+5. 近期主题
+
+生命科学 profile 至少验证：
+
+- PubMed
+- Europe PMC
+- OpenAlex
+- Semantic Scholar
+- Crossref
+
+bioRxiv / PMC 可根据网络状态验证。
+
+### 每个 query 记录
+
+- query
+- profile
+- active sources
+- 每个 source 原始返回数
+- raw total
+- unique total
+- merge count
+- errors
+- latency
+- top 20 DOI/title
+- missing DOI %
+- missing abstract %
+- missing year %
+- duplicate rate
+
+### Gate 5
+
+通过标准：
+
+- 至少 3 个核心 source 能同时返回结果
+- 单一 source 失败不会终止整体查询
+- merge 后重复显著低于 raw pool
+- 输出能正常进入 KnowledgeSeek ranking
+- 不出现大规模空 title / 错位 DOI / authors 崩坏
+
+若数据映射问题明显，回到 Phase 2 修 adapter；不要在 agent.py 打补丁。
+
+## 11. Phase 6 — 基线模式 vs federated 模式对照
+
+### 目标
+
+证明新模式带来的主要价值是 candidate coverage，而不是主观宣称“更好”。
+
+### 固定测试集
+
+建立一个小型可复跑 query set。
+
+建议包含：
+
+- 6 个生命科学问题
+- 2 个计算机科学问题
+- 2 个精确已知论文查询
+
+第一轮不需要建立人工 gold standard。
+
+### 比较指标
+
+对每个 query 比较：
+
+single-source baseline
+vs
+federated
+
+记录：
+
+- raw candidates
+- unique candidates
+- new unique papers
+- source distribution
+- top 20 overlap
+- DOI overlap
+- duplicate rate
+- metadata completeness
+- latency
+- source error count
+
+不要仅用候选数判断质量。
+
+### 输出
+
+建议生成：
+
+tests/fixtures/federated_queries.json
+
+以及一个不进入核心 runtime 的 benchmark 脚本，例如：
+
+scripts/benchmark_federated.py
+
+如果仓库当前没有 scripts 目录，应先判断是否值得新增；也可以放 tests/benchmark/。
+
+### Gate 6
+
+确认：
+
+- candidate coverage 确实增加
+- top results 不发生明显异常漂移
+- latency 在可接受范围
+- 没有因跨源数据增加造成 LLM candidate explosion
+
+如候选池过大：
+优先限制每源 max_results 和总 pool_max；
+不要先增加新的复杂 ranking 算法。
+
+## 12. Phase 7 — 第二轮小优化：source-aware query routing
+
+此阶段是可选增强，不是 MVP 必需。
+
+只有 Phase 0–6 稳定后再进行。
+
+### 问题
+
+MOSAIC 默认 search_all 会把同一个 query 发给多个数据库。
+PaperSeek 已有 source-specific query generation，这是现成优势。
+
+### 最小增强
+
+新增一个薄 Query Router：
+
+- OpenAlex → 复用现有 OpenAlex query generation
+- PubMed → 复用现有 PubMed query generation
+- Semantic Scholar → 复用现有 Semantic Scholar query generation
+- Crossref → 复用现有 Crossref query generation
+- 其他 MOSAIC source → generic query
+
+然后并发调用对应 MOSAIC source adapter。
+
+不要重写 prompt。
+不要把 source-specific query logic 搬进 MOSAIC。
+
+### Gate 7
+
+对同一固定 query set 比较：
+
+single federated query
+vs
+source-aware federated queries
+
+观察：
+
+- unique recall proxy
+- top 20 overlap
+- source failure
+- latency
+- query complexity / malformed rate
+
+只有有明确收益才保留。
+
+## 13. Phase 8 — Packaging 与兼容性
+
+### 目标
+
+不让 MOSAIC 集成破坏现有 PaperSeek 安装。
+
+### 检查
+
+- pyproject optional extra
+- Python <3.11 下基础安装仍可工作
+- Python >=3.11 下 federated extra 可安装
+- Docker 是否需要额外镜像调整
+- CI matrix 是否需要新增一条 Python 3.11 federated job
+- requirements.txt 不应无条件强塞所有 MOSAIC extra
+- 不应安装 NotebookLM / browser / RAG 等非必要依赖
+
+### 推荐
+
+基础：
+paperseek
+
+可选：
+paperseek[federated]
+
+若 PyPI dependency marker 或 MOSAIC packaging 实际证明不适合，再讨论 vendor 极少量模块。
+
+### Gate 8
+
+- test_packaging 通过
+- 原 CI 通过
+- 新 federated CI 或 smoke job 通过
+- Docker / CLI 至少完成一种真实运行验证
+
+## 14. Phase 9 — 文档与收尾
+
+只在功能稳定后更新：
+
+- README
+- docs/user-manual.md
+- docs/deployment.md
+- 如有必要 source metadata / UI source list
+
+说明：
+
+- federated 是可选模式
+- 默认 profile
+- 各 profile 的 source
+- API key 可选项
+- Python 版本要求
+- 单源模式仍然存在
+- source failure 的降级行为
+
+不要在计划阶段先改大量 UI 文案。
+
+## 15. Future：本轮不实现
+
+MOSAIC 中以下能力值得后续独立评估，但不要并入当前 PR：
+
+### A. Local literature library
+- SQLite cache
+- search history enrichment
+- cross-run reuse
+
+### B. PDF acquisition
+- OA PDF
+- Unpaywall
+- PMC
+- downloaded file tracking
+
+### C. Full-text indexing
+- PDF extraction
+- chunking
+- sqlite-vec
+- semantic search
+
+### D. Citation network
+- paper_citations
+- BFS
+- community detection
+
+### E. Evidence layer
+最终可在 full text 上增加：
+
+claim
+→ supporting passage
+→ section/page
+→ paper
+→ support / contradict / context
+→ provenance
+
+但这些必须作为后续独立计划，不得拖入本次 federated retrieval MVP。
+
+## 16. 建议 commit 切分
+
+建议保持小提交：
+
+1. docs: add MOSAIC federated integration plan
+2. test: define MOSAIC adapter contract
+3. feat: add optional MOSAIC adapter
+4. test: define federated provider behavior
+5. feat: add MosaicFederatedProvider
+6. feat: register federated source without changing defaults
+7. test: add federated integration and fallback coverage
+8. chore/test: add reproducible federated smoke benchmark
+9. docs: document optional federated retrieval
+
+不要把全部工作压成一个巨型 commit。
+
+## 17. 回滚策略
+
+任何阶段都应能退回：
+
+- 删除/禁用 federated provider 注册
+- optional MOSAIC dependency 移除
+- 原 provider 与原 source path 无需恢复，因为不应被替换
+
+若 federated 功能不稳定，发布时可以保留代码但默认关闭。
+
+## 18. MVP 最终验收标准
+
+必须同时满足：
+
+1. 原 KnowledgeSeek full test suite 通过。
+2. 原单源模式行为不变。
+3. federated mode 可以在服务器真实查询。
+4. 至少 3 个核心 source 可并发返回。
+5. 单个 source 失败不会使任务整体失败。
+6. 跨源重复论文能够合并。
+7. MOSAIC Paper 到 PaperRecord 字段映射经测试覆盖。
+8. federated candidate 可以直接进入现有 fuse_candidates_rrf()。
+9. 没有引入第二套 ranking pipeline。
+10. MOSAIC 未安装时原 KnowledgeSeek 不受影响。
+11. Python 版本与 optional dependency 行为有明确测试。
+12. 真实查询 benchmark 有可复跑记录。
+13. 代码改动集中在 integration/provider 注册层，而不是大规模修改 agent.py。
+
+## 19. 实施过程中的判断优先级
+
+遇到设计选择时按以下顺序裁决：
+
+1. 能复用现有代码，不新写。
+2. 能加 adapter，不改核心。
+3. 能配置解决，不硬编码。
+4. 能保持 optional，不变成强依赖。
+5. 能局部失败，不整体失败。
+6. 能保留原路径，不替换原路径。
+7. 有测试证据再优化，没有收益不增加复杂度。
+
+## 20. Implementation Log
+
+Codex 每完成一个 Phase 都在这里追加：
+
+### Phase N
+- 时间：
+- KnowledgeSeek SHA：
+- MOSAIC SHA：
+- 修改文件：
+- 测试：
+- 结果：
+- 发现的问题：
+- 是否偏离计划：
+- commit：
+- 下一步：
+
+不要提前填写未执行阶段。
