@@ -37,21 +37,26 @@ def mosaic_available() -> bool:
     """Return True when the optional ``mosaic`` package can be imported."""
     try:
         import mosaic.models  # noqa: F401
+        import mosaic.search  # noqa: F401
+        import mosaic.source_registry  # noqa: F401
     except Exception:
         return False
     return True
 
 
 def require_mosaic():
-    """Import ``mosaic.models`` and return it, raising a clear error if absent."""
+    """Import the ``mosaic`` package (with federated submodules) or raise."""
     try:
-        import mosaic.models
+        import mosaic
+        import mosaic.models  # noqa: F401
+        import mosaic.search  # noqa: F401
+        import mosaic.source_registry  # noqa: F401
     except Exception as exc:  # pragma: no cover - depends on environment
         raise MosaicNotInstalledError(
             "The 'mosaic' package is required for federated retrieval. "
             "Install it with: pip install 'paperseek[federated]'"
         ) from exc
-    return mosaic.models
+    return mosaic
 
 
 def mosaic_paper_from_dict(payload: Dict[str, Any]):
@@ -61,8 +66,8 @@ def mosaic_paper_from_dict(payload: Dict[str, Any]):
     package itself is absent; raises :class:`MosaicNotInstalledError` when it
     really is missing.
     """
-    models = require_mosaic()
-    return models.Paper.from_dict(payload)
+    mosaic = require_mosaic()
+    return mosaic.models.Paper.from_dict(payload)
 
 
 def paper_to_record(paper: Any, limit_hint: int = 0) -> PaperRecord:

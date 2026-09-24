@@ -982,3 +982,27 @@ Codex 每完成一个 Phase 都在这里追加：
 - 是否偏离计划：否
 - commit：见 "feat: register federated data source across CLI, web, and skill surfaces"
 - 下一步：Phase 5 真实网络 smoke test（需网络可达环境；当前主机 pypi/外网受限，先探测出口，不行则记录阻塞并先做 Phase 8 打包准备）。
+
+### Phase 5
+- 时间：2026-09-25
+- KnowledgeSeek SHA：6acd45f →（本次 commit）
+- MOSAIC SHA：64b991927e5124c964a29f3103eb6b506c44e8d8（只读）
+- 环境声明：本机（fwq10ys）具备学术 API 出口（openalex/crossref/arxiv/DOAJ/EuropePMC/PubMed GET 均 200），pypi 不可达；测试用 venv py3.10.11 + LD_PRELOAD sqlite shim + PYTHONPATH 指向同级只读 mosaic checkout。
+- 先修复（Phase 2 引入、真实执行暴露的缺陷）：require_mosaic() 原返回 mosaic.models 子模块，而 provider 在其上访问 mosaic.source_registry / mosaic.search → AttributeError。改为导入并返回 mosaic 根包（显式预导入 models/search/source_registry 三个子模块）；mosaic_available() 同步对齐；mosaic_paper_from_dict 改用 mosaic.models.Paper。此前 mock 测试把 require_mosaic patch 成假命名空间，掩盖了该缺陷——已由真实网络调用暴露并修复。回归：test_mosaic_adapter+test_mosaic_provider 29 passed/1 skipped（skip 为"未装 mosaic"分支，本环境装了属预期跳过）；全量 207 passed/2 skipped/85 subtests（另 1 skip 为环境性，非回归）。
+- smoke 执行：workspace 下 phase5-smoke.py（不入库）+ 结果 phase5-smoke-results.json。5 类查询 × 对应 profile（narrow-bio/synonym-heavy 用 biomed，其余 general），limit=40, max_per_source=10。
+- 每查询指标（全部成功返回）：
+  - exact-title "Attention is all you need"（general）：3 源在线（S2 429），raw 120 → unique 109（merge 11，重复率 9.2%），DOI 缺失 0%，abstract 缺失 40%（Crossref 无摘要属源特性），year 0%，hits 40，2.5s
+  - topical "transformer attention mechanisms"（general）：3 源，raw 120 → 119（merge 1），DOI 缺 5%，abstract 缺 0%，2.7s
+  - narrow-bio "CRISPR base editing off-target evaluation"（biomed）：5 源返回（PubMed/EuropePMC/PMC/OpenAlex/Crossref 各 40 + bioRxiv 0），raw 200 → 191（merge 9），DOI 缺 2.5%，abstract 缺 2.5%，year 0%，3.8s
+  - synonym-heavy "tumor immunotherapy checkpoint inhibitor resistance"（biomed）：5 源，raw 200 → 194（merge 6），DOI 缺 7.5%，abstract 缺 12.5%，year 缺 7.5%，3.1s
+  - recent "large language model agents 2025"（general）：3 源，raw 145 → 143（merge 2），DOI 缺 2.5%，abstract 缺 22.5%，3.2s
+- biomed 核心源核验：PubMed/EuropePMC/OpenAlex/Crossref 全部真实返回；Semantic Scholar 持续 429（独立单源重试亦然）——服务器 IP 限流，非代码缺陷；隔离性由"每次查询 S2 失败均未影响其余源与整体结果"直接证明。
+- Gate 5 逐条：≥3 核心源同时返回 ✓（general 3、biomed 5）；单源失败不终止 ✓；merge 去重可见 ✓（5 查询 merge 计 29 条，hits 内 uid 零重复）；输出进 ranking ✓（每查询 hits 喂 fuse_candidates_rrf 正常产出 fused 排序）；无大规模空 title/错位 DOI/作者崩坏 ✓（top20 抽查标题-DOI 对应正常，arXiv/DOI 归一化生效）。
+- 结果：Gate 5 满足
+- 发现的问题：
+  1. Semantic Scholar 公共 API 对本机 IP 持续 429；带 key 可解（FEDERATED 相关配置留待 Phase 8 文档说明）。
+  2. arXiv 在 mosaic 侧拼 "all:" 前缀查询串返回 406（mosaic 上游行为，只读不改；cs profile 短查询不受影响）。
+  3. abstract 缺失集中于 Crossref 无摘要、部分源 JATS 缺失——源特性，映射层如实保留空串，不做臆造填充。
+- 是否偏离计划：smoke 脚本置于 workspace 而非 repo（计划允许 benchmark 脚本另行评估入 scripts/，属 Phase 6 决策）。
+- commit：见 "fix: return mosaic root package from require_mosaic and validate real-network federated smoke"
+- 下一步：Phase 6 固定 query set + baseline vs federated 对照 benchmark。
