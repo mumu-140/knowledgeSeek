@@ -48,6 +48,9 @@ dev = [
 mcp = [
     "mcp>=1.0",
 ]
+federated = [
+    "mosaic-search>=1.5.5; python_version >= '3.11'",
+]
 
 [project.urls]
 Homepage = "https://www.paperseek.xyz/"

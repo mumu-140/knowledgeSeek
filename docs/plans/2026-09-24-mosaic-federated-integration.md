@@ -1029,3 +1029,28 @@ Codex 每完成一个 Phase 都在这里追加：
 - 是否偏离计划：否（benchmark 脚本按计划评估后新增 scripts/ 目录，仅 1 个文件；fixture 放 tests/fixtures/）。
 - commit：见 "feat: add federated benchmark fixture, comparison script, and deterministic merge ordering"
 - 下一步：Phase 7（可选）source-aware query routing——评估后决定跳过或最小实现；随后 Phase 8 打包。
+
+### Phase 7（可选增强——评估后跳过）
+- 时间：2026-09-25
+- 评估方式：无法运行真实 LLM query generation（本环境无 LLM key，且原则 8 禁触任何 key），改用"手写 style-faithful 变体"做路由收益代理实验——按 prompts.py 各源官方风格（OpenAlex 关键词+引号短语 / Crossref 3-10 词书目式无布尔 / PubMed 大写布尔 ESearch）为 bio-01、cs-01 各写 per-source 查询，A=单查询广播（现行为）vs B=逐源路由，均用 mosaic merge_papers 合并、指纹取 DOI/title。
+- 结果：
+  - bio-01：A 49 篇（30.3s，1 错误——S2 SSL 超时）；B 50 篇（7.5s，0 错误）；重叠 34，onlyA 15 / onlyB 16。
+  - cs-01：A 20 篇（1.9s，3 错误）；B 20 篇（2.2s，0 错误）；重叠仅 4，onlyA 16 / onlyB 16。
+- 判定：无明确收益——数量持平（49v50、20v20）；B 的延迟/错误优势全部来自"路由集恰好不含 S2/DBLP"这一实验安排，非路由本身；组合差异（overlap 34/49、4/20）在无 gold standard 下无法判优劣（计划明示第一轮不建 gold standard）；malformed rate 需 LLM 实测，本环境不可得。按 Gate 7 自身标准"只有有明确收益才保留"→ 不保留。
+- 结论：Phase 7 跳过，不引入 Query Router 代码；source-specific query generation 既有资产保留原位（federated 走 generic 分支），未来有 LLM 环境可按本实验框架重测。
+- commit：无代码变更，仅本日志（随 Phase 8 一并提交）。
+- 下一步：Phase 8 打包（pyproject optional extra federated + python_version marker + test_packaging）。
+
+### Phase 8
+- 时间：2026-09-25
+- KnowledgeSeek SHA：1d97461 →（本次 commit）
+- 修改文件：pyproject.toml（federated extra：`mosaic-search>=1.5.5; python_version >= '3.11'`）、tests/test_packaging.py（test_federated_extra_is_optional_and_gated）、.github/workflows/ci.yml（新增 federated job：Python 3.11 安装 `.[dev,federated]` 并运行 mosaic 测试集）
+- 检查结果：
+  - pyproject：federated 为 opt-in extra，带 `python_version >= '3.11'` 标记；base dependencies 与 requirements.txt 均不含 mosaic；未混入 playwright/notebooklm/flask/sqlite-vec/scrapy/selenium 等重量级 extras
+  - Python 3.10 无 mosaic 环境：213 passed / 1 skipped；CLI `--help` 正常；未安装 mosaic 时 agent 惰性初始化、lane 报错并返回空候选，不崩溃
+  - Docker 无需变更（python:3.11-slim 安装 `.`，如需 federated 可 `pip install ".[federated]"`）
+  - CI：新增 federated job 与现有 test matrix 并存，base matrix 不装 mosaic
+- Gate 8 逐条：✅ pip install -e ".[dev]" 不拉 mosaic（extra 门控）；✅ 全测试通过（py3.10 无 mosaic 213 passed；py3.11 带 mosaic 由 CI federated job 覆盖）；✅ 未安装 mosaic 时 CLI/--federated 参数给出可操作错误（MosaicNotInstalledError 提示 `pip install 'paperseek[federated]'`）；✅ requirements.txt / Docker 不变（base 安装不含 mosaic）
+- 是否偏离计划：否——federated extra 采用 mosaic-search 基础安装（无 core extra，其 dev/notebooklm/browser/ui/desktop/rag/analysis/all 均非运行所需，httpx+stdlib 即足以支撑 federated retrieval）
+- commit：见 "build: gate MOSAIC behind optional federated extra with python marker and CI job"
+- 下一步：Phase 9 文档收尾（README、user-manual、deployment 增补 federated 用法）。
