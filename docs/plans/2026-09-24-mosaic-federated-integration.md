@@ -1065,7 +1065,6 @@ Codex 每完成一个 Phase 都在这里追加：
 - 是否偏离计划：否
 - commit：见 "docs: document federated multi-source retrieval usage"
 - 下一步：收尾（工作树清点、向用户交付总结）。
-[Phase 8 记录占位]
 ### Phase 8 自检记录（2026-09-24）
 
 - federated extra 落地：pyproject.toml `federated = ['mosaic-search>=1.5.5; python_version >= "3.11"']`，基础安装（py3.8+）永不拉取 MOSAIC。
