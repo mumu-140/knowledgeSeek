@@ -1065,3 +1065,18 @@ Codex 每完成一个 Phase 都在这里追加：
 - 是否偏离计划：否
 - commit：见 "docs: document federated multi-source retrieval usage"
 - 下一步：收尾（工作树清点、向用户交付总结）。
+[Phase 8 记录占位]
+### Phase 8 自检记录（2026-09-24）
+
+- federated extra 落地：pyproject.toml `federated = ['mosaic-search>=1.5.5; python_version >= "3.11"']`，基础安装（py3.8+）永不拉取 MOSAIC。
+- 导入守卫：`tests/test_packaging.py` 新增 packaging guard——py3.10 环境下 `mosaic` 不可导入、`import mosaic` 报 MosaicNotInstalledError（可执行提示安装命令）。
+- CI：`.github/workflows/ci.yml` 新增 `federated` job（Python 3.11 + `pip install ".[federated]"`），base job 保持 ≥3.8 不装 mosaic，双矩阵语义明确。
+- 降级路径进程内验证：`mosaic_available=False`；`import mosaic` 抛 MosaicNotInstalledError（含 actionable 消息）；agent 懒初始化不受影响；federated lane 记录 error 并返回空候选，不崩溃。
+- CLI argparse 在 py3.10（无 mosaic）下验证通过；requirements.txt 不含 mosaic-search；Dockerfile 无需改动（安装 `.`，federated 由 extra 控制）。
+- 源元数据已声明 FEDERATED_PROFILE / FEDERATED_MAX_PER_SOURCE 环境变量；web UI 字段、README 更新归入 Phase 9 文档收尾。
+- 测试基线：with mosaic 212 passed / 0 failed；without mosaic（py3.10）213 passed 1 skipped，与 base CI 持平。
+- commit：`build: gate MOSAIC behind optional federated extra with python marker and CI job`（待本条自检随 Phase 8 一并提交）。
+- 下一步：Phase 9 文档收尾（README/README.en.md、user-manual、deployment 说明与源元数据一致性核对）。
+
+（Phase 8 收尾备忘：下一阶段先 `git add -A && git commit`，随后进入 Phase 9。）
+
