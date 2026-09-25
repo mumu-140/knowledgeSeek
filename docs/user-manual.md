@@ -535,7 +535,7 @@ Web UI 运行时：
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `DATA_SOURCE` | `openalex` | 数据源：`openalex`、`arxiv`、`semanticscholar`、`pubmed`、`googlescholar`、`paperhub`、`crossref`、`wos`。 |
+| `DATA_SOURCE` | `openalex` | 数据源：`openalex`、`arxiv`、`semanticscholar`、`pubmed`、`googlescholar`、`paperhub`、`crossref`、`wos`、`federated`（需安装 `paperseek[federated]`，Python ≥ 3.11）。 |
 | `LLM_PROVIDER` | `openai` | LLM 服务商。 |
 | `LLM_API_TYPE` | 由 provider 决定 | `openai_chat`、`openai_responses`、`anthropic_messages`。 |
 | `LLM_MODEL` | 由 provider 决定 | 模型名称。 |
@@ -887,6 +887,7 @@ paperseek sources --json
 | 计算机顶会 | `paperhub` | 不需要 | 支持，取决于记录数据 | 不支持 | 不支持 | 不支持 |
 | Crossref | `crossref` | 通常不需要 | 取决于出版商元数据 | 支持，覆盖不稳定 | 不支持 | 不支持 |
 | Web of Science Starter | `wos` | 必需 | 不作为稳定字段依赖 | 支持，取决于权限 | 不支持 | 不支持 |
+| Federated 多源（MOSAIC） | `federated` | 不需要 | 支持 | 支持 | 不支持 | 支持，取决于记录 |
 
 ### OpenAlex
 
@@ -1033,6 +1034,51 @@ export WOS_DB=WOS
 
 WoS Starter 的字段、请求量和可用数据库取决于订阅计划与机构授权。遇到 `401` 时检查 key、HTTPS 和订阅权限。遇到 `512` 时，通常需要同时排查 Clarivate 服务状态和查询兼容性。
 
+### Federated 多源检索（MOSAIC）
+
+Federated 数据源通过可选的 MOSAIC 库把一次查询扇出到多个学术数据源，合并去重后进入 PaperSeek 现有的候选池融合与排序（RRF / reranker / LLM ranking）。适合：
+
+- 一次查询覆盖多个数据源，扩大候选池。
+- 跨学科查询（生命科学、计算机科学等）。
+- 单源结果不足时补充召回。
+
+要求 Python ≥ 3.11，并安装可选依赖：
+
+```bash
+pip install "paperseek[federated]"
+```
+
+未安装 MOSAIC 时选择 `federated` 会得到可操作的错误提示，不影响其他数据源。MOSAIC 不需要 API Key；缺少某个源 Key 的源会被自动跳过，单个源失败不会中断整个检索。
+
+启用方式（三选一）：
+
+```bash
+# 环境变量
+export DATA_SOURCE=federated
+export FEDERATED_PROFILE=biomed
+export FEDERATED_MAX_PER_SOURCE=25
+```
+
+```bash
+# CLI
+paperseek "CRISPR base editing off-target evaluation" \
+  --source federated \
+  --federated-profile biomed \
+  --federated-max-per-source 25
+```
+
+Web UI：在设置表单中配置 Federated Profile 与 Federated Max Per Source，选择 `federated` 数据源。
+
+Profile 与对应源：
+
+| Profile | 数据源 |
+| --- | --- |
+| `biomed` | PubMed、Europe PMC、PMC、OpenAlex、Semantic Scholar、bioRxiv/medRxiv、Crossref |
+| `cs` | OpenAlex、Semantic Scholar、arXiv、DBLP、Crossref |
+| `general` | OpenAlex、Semantic Scholar、Crossref、DOAJ |
+
+默认 profile 为 `general`，默认每源上限为 25。生命周期服务（Web of Science、NotebookLM）不在 federated 扇出范围内。
+
 ### 选择数据源
 
 | 需求 | 推荐数据源 |
@@ -1046,6 +1092,7 @@ WoS Starter 的字段、请求量和可用数据库取决于订阅计划与机�
 | 需要计算机顶会论文 | 计算机顶会 |
 | 需要 DOI 与出版元数据校验 | Crossref |
 | 机构要求使用 Web of Science | WoS Starter |
+| 一次查询覆盖多源、扩大候选池 | Federated 多源（MOSAIC） |
 | 希望尽量少配置 API Key | OpenAlex 匿名测试、arXiv、计算机顶会或 Crossref |
 | 需要较稳定的长期运行 | OpenAlex API Key + LLM Key |
 
@@ -1193,7 +1240,9 @@ paperseek search "responsible AI governance" --source openalex --json > results.
 | 参数 | 说明 |
 | --- | --- |
 | `question` | 自然语言研究问题。 |
-| `--source` | 数据源：`openalex`、`arxiv`、`semanticscholar`、`pubmed`、`googlescholar`、`paperhub`、`crossref`、`wos`。 |
+| `--source` | 数据源：`openalex`、`arxiv`、`semanticscholar`、`pubmed`、`googlescholar`、`paperhub`、`crossref`、`wos`、`federated`。 |
+| `--federated-profile` | Federated 数据源的扇出 profile：`biomed`、`cs`、`general`（默认 `general`）。 |
+| `--federated-max-per-source` | Federated 每源结果上限（默认 25）。 |
 | `--field`, `-f` | 学科或领域提示。 |
 | `--discipline`, `--discipline-field` | 所选数据源的原生过滤值；OpenAlex Field、WoS Category 或 arXiv Category 可用，可重复传入多个值。 |
 | `--db`, `-d` | WoS 数据库代码，例如 `WOS`。 |

@@ -1048,9 +1048,20 @@ Codex 每完成一个 Phase 都在这里追加：
 - 检查结果：
   - pyproject：federated 为 opt-in extra，带 `python_version >= '3.11'` 标记；base dependencies 与 requirements.txt 均不含 mosaic；未混入 playwright/notebooklm/flask/sqlite-vec/scrapy/selenium 等重量级 extras
   - Python 3.10 无 mosaic 环境：213 passed / 1 skipped；CLI `--help` 正常；未安装 mosaic 时 agent 惰性初始化、lane 报错并返回空候选，不崩溃
-  - Docker 无需变更（python:3.11-slim 安装 `.`，如需 federated 可 `pip install ".[federated]"`）
+  - Docker 无需变更（python:3.12-slim 安装 `.`，如需 federated 可 `pip install ".[federated]"`）
   - CI：新增 federated job 与现有 test matrix 并存，base matrix 不装 mosaic
 - Gate 8 逐条：✅ pip install -e ".[dev]" 不拉 mosaic（extra 门控）；✅ 全测试通过（py3.10 无 mosaic 213 passed；py3.11 带 mosaic 由 CI federated job 覆盖）；✅ 未安装 mosaic 时 CLI/--federated 参数给出可操作错误（MosaicNotInstalledError 提示 `pip install 'paperseek[federated]'`）；✅ requirements.txt / Docker 不变（base 安装不含 mosaic）
 - 是否偏离计划：否——federated extra 采用 mosaic-search 基础安装（无 core extra，其 dev/notebooklm/browser/ui/desktop/rag/analysis/all 均非运行所需，httpx+stdlib 即足以支撑 federated retrieval）
 - commit：见 "build: gate MOSAIC behind optional federated extra with python marker and CI job"
 - 下一步：Phase 9 文档收尾（README、user-manual、deployment 增补 federated 用法）。
+
+### Phase 9
+- 时间：2026-09-25
+- KnowledgeSeek SHA：0ceb422 →（本次 commit）
+- 修改文件：.env.example（新增 FEDERATED_PROFILE / FEDERATED_MAX_PER_SOURCE 注释项）、README.md + README.en.md（数据源表新增 Federated 行：可选依赖、无 Key、需 py≥3.11 + `pip install "paperseek[federated]"`、排序仍走 PaperSeek RRF/reranker/LLM）、docs/user-manual.md（能力总览表新增 federated 行；DATA_SOURCE 环境变量表补 `federated`；CLI 参数表补 `--federated-profile` / `--federated-max-per-source`；新增 "Federated 多源检索（MOSAIC）" 小节：安装方式、三种启用途径（env/CLI/Web UI）、三 profile 源清单、默认值、单源失败隔离与缺 Key 自动跳过；"选择数据源"表新增对应行）、docs/deployment.md（Docker 环境变量区说明 federated 为可选依赖及镜像启用方式 `pip install ".[federated]"`，列出三个环境变量）
+- 文档内容与代码核对：CLI flags（cli.py:176-177 choices/默认）、config 默认值（config.py:60-61 general/25）、env 读取（paperseek/config.py:84-85）、profile 源清单（mosaic_provider.py:26-34）、source_metadata notes 与 optional_config 均逐条对齐
+- 检查结果：全量 base 套件 213 passed / 1 skipped（py3.10 无 mosaic），test_packaging 的 README/user-manual/deployment 断言全部保持绿
+- Gate 9 逐条：✅ README 双语数据源表含 federated 及安装提示；✅ user-manual 覆盖安装、启用、profile、参数；✅ deployment 说明 Docker 可选启用；✅ .env.example 有注释项可抄；✅ 文档守卫测试不回归
+- 是否偏离计划：否
+- commit：见 "docs: document federated multi-source retrieval usage"
+- 下一步：收尾（工作树清点、向用户交付总结）。
