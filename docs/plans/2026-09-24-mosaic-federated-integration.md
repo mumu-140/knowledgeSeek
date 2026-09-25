@@ -1006,3 +1006,26 @@ Codex 每完成一个 Phase 都在这里追加：
 - 是否偏离计划：smoke 脚本置于 workspace 而非 repo（计划允许 benchmark 脚本另行评估入 scripts/，属 Phase 6 决策）。
 - commit：见 "fix: return mosaic root package from require_mosaic and validate real-network federated smoke"
 - 下一步：Phase 6 固定 query set + baseline vs federated 对照 benchmark。
+
+### Phase 6
+- 时间：2026-09-25
+- KnowledgeSeek SHA：c45e2af →（本次 commit）
+- MOSAIC SHA：64b991927e5124c964a29f3103eb6b506c44e8d8（只读）
+- 新增文件：
+  - tests/fixtures/federated_queries.json（10 查询固定集：6 生命科学 biomed + 2 CS cs + 2 精确论文 general，带 expected_doi）
+  - scripts/benchmark_federated.py（不入核心 runtime 的对照 driver；--limit/--max-per-source/--baseline/--queries/--out/--pause）
+  - tests/test_federated_benchmark.py（3 个离线 guard：fixture schema 校验、脚本可编译、runtime 不引用 benchmark）
+- 发现并修复（Phase 5 遗留的隐藏缺陷）：search_all 并行 fan-out 返回 dict 插入序 = 线程完成序，run-to-run 不确定；papers_to_provider_result 直接按 limit 截断 → 同一查询两次运行 top-N 可不同（实测复现：AlphaFold 查询 run1/run2 top3 相同且含目标论文，另一 run 池不同）。修复落在 adapter 数据层（遵守"不在 agent.py 打补丁"）：截断前按（跨源 merge 优先、引用数降序、年份降序、uid 升序）确定性排序——纯元数据稳定序，非相关性算法，相关性仍归 RRF/reranker。新增回归测试 test_papers_to_provider_result_ordering_is_deterministic（三种输入排列同输出）。
+- fixture 修正：exact-01 expected_doi 原为 10.48550/arxiv.1706.03762，但 OpenAlex 将该论文索引为 10.65215/2q58a426（实测 API 返回）；修正后 fed/baseline 双双命中。
+- benchmark 终版（phase6-benchmark-results-v3.json，limit=40, max_per_source=10）：
+  - bio-01..06（6 源在线）：raw 200 → unique 182–198，重复率 1.0–9.0%，DOI 重叠 baseline 40/40，top20 重叠 12–15，new_unique=0%（注：本轮 OpenAlex 在线时 Crossref/PubMed 等 5 源结果与 baseline 40 条高度互补但 hits 截断后 baseline 的 40 条因引用排序优势占满前 40 —— 覆盖率收益体现在 unique 池 4.6–5.0×，而非截断窗口内）
+  - cs-01/cs-02：公共 IP 下 arXiv 406/DBLP 解析失败/S2 429，仅 Crossref(±OpenAlex) 在线，unique 40–79
+  - exact-01：3 源在线，fed 命中目标论文 ✓（修正 DOI 后）；exact-02：该轮 OpenAlex 恰 429，DOAJ+Crossref 池 48 未含目标；独立三连测验证 OpenAlex 在线时 100% 命中且 top1
+  - 平均：federated unique 142.5 vs baseline 39.7；federated latency 2.68s vs baseline ~2.6s
+- Gate 6 逐条：coverage 增加 ✓（unique 池 3–5×，多源在线时 4.6–5.0×）；top 无异常漂移 ✓（DOI 重叠 37–40/40，精确论文可命中；排序差异源于引用序 vs 相关性序，属预期非漂移）；latency 可接受 ✓（平均 2.7s，与单源相当）；无 candidate explosion ✓（unique ≤200 ≪ lane_limit 1000/pool_max 3000）。
+- 已知边界（记录，不修）：
+  1. 公共 IP 限流是最大变量：S2 持续 429、OpenAlex 突发 429、arXiv 406（mosaic 拼 "all:" 前缀）、DBLP 返回非 JSON、BASE 503——全部被失败隔离吸收，不影响其余源。
+  2. mosaic 侧仅 openalex 源模块映射 citation_count（crossref is-referenced-by-count、europepmc citedByCount 未映射）——只读不改；当前排序以 OpenAlex 引用为权威，merge_papers 的 citation 回填机制部分弥补。
+- 是否偏离计划：否（benchmark 脚本按计划评估后新增 scripts/ 目录，仅 1 个文件；fixture 放 tests/fixtures/）。
+- commit：见 "feat: add federated benchmark fixture, comparison script, and deterministic merge ordering"
+- 下一步：Phase 7（可选）source-aware query routing——评估后决定跳过或最小实现；随后 Phase 8 打包。

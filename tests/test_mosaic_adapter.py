@@ -173,6 +173,24 @@ class MosaicAdapterTest(unittest.TestCase):
             mosaic_paper_from_dict({"title": "x"})
         self.assertIn("paperseek[federated]", str(ctx.exception))
 
+    def test_papers_to_provider_result_ordering_is_deterministic(self):
+        # search_all returns merge order (thread completion under parallel
+        # fan-out); the adapter must emit a stable order before truncation so
+        # the same query yields the same first `limit` hits across runs.
+        low = make_paper(title="Low Cited Recent", doi="10.1/low", citation_count=1, year=2024)
+        high_old = make_paper(title="High Cited Old", doi="10.1/highold", citation_count=500, year=2001)
+        high_new = make_paper(title="High Cited New", doi="10.1/highnew", citation_count=500, year=2023)
+        for order in (
+            (low, high_old, high_new),
+            (high_new, low, high_old),  # different input order
+            (high_old, high_new, low),
+        ):
+            result = papers_to_provider_result(list(order), limit=0)
+            self.assertEqual(
+                [r.title for r in result.hits],
+                ["High Cited New", "High Cited Old", "Low Cited Recent"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

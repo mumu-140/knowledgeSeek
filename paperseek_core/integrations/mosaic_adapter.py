@@ -141,15 +141,30 @@ def papers_to_provider_result(
 ) -> ProviderSearchResult:
     """Convert merged MOSAIC ``Paper`` objects into a ``ProviderSearchResult``.
 
-    ``per_source_stats``/``errors`` mirror the ``stats``/``errors`` outputs of
-    ``mosaic.search.search_all``; they are attached to metadata-side ``raw``
-    nowhere — the result carries only hits and pagination, matching the other
-    KnowledgeSeek providers.  The stats stay with the federated provider layer.
+    ``search_all`` returns papers in merge/insertion order, which under
+    parallel fan-out is thread-completion order — nondeterministic run to
+    run.  Before the ``limit`` truncation the hits are put in a deterministic
+    metadata order (cross-source merge wins, then citations, then recency,
+    then uid) so the same query yields the same first ``limit`` hits.  This
+    is a stable data-layer ordering, not relevance ranking: text relevance
+    stays with KnowledgeSeek's RRF/reranker downstream.
     """
-    hits = [paper_to_record(paper) for paper in papers or []]
+    records = [paper_to_record(paper) for paper in papers or []]
+    records.sort(key=lambda record: _deterministic_sort_key(record))
     if limit and limit > 0:
-        hits = hits[:limit]
+        records = records[:limit]
     return ProviderSearchResult(
-        metadata=SearchMetadata(total=len(hits), page=1, limit=limit or len(hits)),
-        hits=hits,
+        metadata=SearchMetadata(total=len(records), page=1, limit=limit or len(records)),
+        hits=records,
     )
+
+
+def _deterministic_sort_key(record: PaperRecord) -> tuple:
+    """Stable, relevance-free ordering key for merged federated hits."""
+    try:
+        citations = int(record.citations[0].count) if record.citations else 0
+    except (TypeError, ValueError, IndexError):
+        citations = 0
+    year = getattr(record.source, "publish_year", None)
+    year = int(year) if year else 0
+    return (-citations, -year, record.uid or record.title or "")
