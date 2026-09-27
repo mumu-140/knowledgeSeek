@@ -1,17 +1,12 @@
-"""Adapter between MOSAIC ``Paper`` objects and KnowledgeSeek ``PaperRecord``.
+"""Adapter between MOSAIC Paper objects and KnowledgeSeek PaperRecord.
 
 MOSAIC stays an optional dependency: importing this module never imports
-``mosaic``.  Callers first check :func:`mosaic_available`, then pass already
-constructed ``mosaic.models.Paper`` instances (or plain dicts via
-``Paper.from_dict``) to the conversion helpers.
-
-Only data mapping lives here: no ranking, no RRF, no embedding, no LLM,
-no citation expansion, no query generation, no network access.
+mosaic. Only data mapping and provider-result shaping live here.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from paperseek_core.sources.providers import (
     PaperAuthor,
@@ -30,14 +25,14 @@ PROVIDER_ID = "federated"
 
 
 class MosaicNotInstalledError(RuntimeError):
-    """Raised when the optional ``mosaic`` package is required but missing."""
+    """Raised when the optional mosaic package is required but missing."""
 
 
 def mosaic_available() -> bool:
-    """Return True when the optional ``mosaic`` package can be imported."""
+    """Return True when the optional MOSAIC federated modules can be imported."""
     try:
         import mosaic.models  # noqa: F401
-        import mosaic.search  # noqa: F401
+        import mosaic.services  # noqa: F401
         import mosaic.source_registry  # noqa: F401
     except Exception:
         return False
@@ -45,11 +40,11 @@ def mosaic_available() -> bool:
 
 
 def require_mosaic():
-    """Import the ``mosaic`` package (with federated submodules) or raise."""
+    """Import the MOSAIC package and modules used by federated retrieval."""
     try:
         import mosaic
         import mosaic.models  # noqa: F401
-        import mosaic.search  # noqa: F401
+        import mosaic.services  # noqa: F401
         import mosaic.source_registry  # noqa: F401
     except Exception as exc:  # pragma: no cover - depends on environment
         raise MosaicNotInstalledError(
@@ -60,23 +55,16 @@ def require_mosaic():
 
 
 def mosaic_paper_from_dict(payload: Dict[str, Any]):
-    """Rebuild a ``mosaic.models.Paper`` from its ``to_dict()`` form.
-
-    Keeps tests and provider code free of a hard ``mosaic`` import while the
-    package itself is absent; raises :class:`MosaicNotInstalledError` when it
-    really is missing.
-    """
     mosaic = require_mosaic()
     return mosaic.models.Paper.from_dict(payload)
 
 
-def paper_to_record(paper: Any, limit_hint: int = 0) -> PaperRecord:
-    """Convert a ``mosaic.models.Paper`` into a KnowledgeSeek ``PaperRecord``.
-
-    Field mapping follows the Phase 1 audit table: identifiers drive dedup,
-    the originating MOSAIC source name is preserved in ``raw["mosaic_source"]``
-    (and as citation db label), and the original payload stays in ``raw``.
-    """
+def paper_to_record(
+    paper: Any,
+    limit_hint: int = 0,
+    provenance_sources: Optional[List[str]] = None,
+) -> PaperRecord:
+    """Convert a MOSAIC Paper into a KnowledgeSeek PaperRecord."""
     get = lambda key: getattr(paper, key, None)
 
     title = (get("title") or "").strip()
@@ -111,6 +99,11 @@ def paper_to_record(paper: Any, limit_hint: int = 0) -> PaperRecord:
             raw_payload = {}
     if mosaic_source:
         raw_payload = {**raw_payload, "mosaic_source": mosaic_source}
+    if provenance_sources:
+        raw_payload = {
+            **raw_payload,
+            "mosaic_sources": list(dict.fromkeys(str(value) for value in provenance_sources if value)),
+        }
 
     return PaperRecord(
         uid=doi or arxiv_id or openalex_id or title,
@@ -133,38 +126,58 @@ def paper_to_record(paper: Any, limit_hint: int = 0) -> PaperRecord:
     )
 
 
+def _paper_uid(paper: Any) -> str:
+    uid = getattr(paper, "uid", "")
+    if uid:
+        return str(uid)
+    doi = normalize_doi(getattr(paper, "doi", "") or "")
+    if doi:
+        return f"doi:{doi.lower()}"
+    arxiv_id = (getattr(paper, "arxiv_id", "") or "").strip()
+    if arxiv_id:
+        return f"arxiv:{arxiv_id}"
+    pii = (getattr(paper, "pii", "") or "").strip()
+    if pii:
+        return f"pii:{pii}"
+    title = (getattr(paper, "title", "") or "").strip().lower()
+    return f"title:{title[:80]}" if title else ""
+
+
 def papers_to_provider_result(
     papers: List[Any],
     limit: int = 0,
+    page: int = 1,
+    provenance_by_uid: Optional[Mapping[str, List[str]]] = None,
     per_source_stats: Optional[Dict[str, int]] = None,
     errors: Optional[List[str]] = None,
 ) -> ProviderSearchResult:
-    """Convert merged MOSAIC ``Paper`` objects into a ``ProviderSearchResult``.
+    """Convert an ordered merged MOSAIC pool into one paged provider result.
 
-    ``search_all`` returns papers in merge/insertion order, which under
-    parallel fan-out is thread-completion order — nondeterministic run to
-    run.  Before the ``limit`` truncation the hits are put in a deterministic
-    metadata order (cross-source merge wins, then citations, then recency,
-    then uid) so the same query yields the same first ``limit`` hits.  This
-    is a stable data-layer ordering, not relevance ranking: text relevance
-    stays with KnowledgeSeek's RRF/reranker downstream.
+    Ordering is intentionally preserved. The federated provider constructs a
+    deterministic cross-source sequence before this adapter is called; the
+    adapter must not add citation- or recency-based pre-ranking ahead of
+    KnowledgeSeek's RRF/reranker pipeline.
     """
-    records = [paper_to_record(paper) for paper in papers or []]
-    records.sort(key=lambda record: _deterministic_sort_key(record))
-    if limit and limit > 0:
-        records = records[:limit]
+    provenance_by_uid = provenance_by_uid or {}
+    records = [
+        paper_to_record(
+            paper,
+            provenance_sources=provenance_by_uid.get(_paper_uid(paper), []),
+        )
+        for paper in papers or []
+    ]
+
+    total = len(records)
+    page = max(1, int(page or 1))
+    requested_limit = max(0, int(limit or 0))
+    if requested_limit > 0:
+        start = (page - 1) * requested_limit
+        records = records[start:start + requested_limit]
+        metadata_limit = requested_limit
+    else:
+        metadata_limit = total
+
     return ProviderSearchResult(
-        metadata=SearchMetadata(total=len(records), page=1, limit=limit or len(records)),
+        metadata=SearchMetadata(total=total, page=page, limit=metadata_limit),
         hits=records,
     )
-
-
-def _deterministic_sort_key(record: PaperRecord) -> tuple:
-    """Stable, relevance-free ordering key for merged federated hits."""
-    try:
-        citations = int(record.citations[0].count) if record.citations else 0
-    except (TypeError, ValueError, IndexError):
-        citations = 0
-    year = getattr(record.source, "publish_year", None)
-    year = int(year) if year else 0
-    return (-citations, -year, record.uid or record.title or "")

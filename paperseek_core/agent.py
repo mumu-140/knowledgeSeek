@@ -560,7 +560,10 @@ class PaperSeekAgent:
             self.provider = MosaicFederatedProvider(
                 profile=getattr(config, "federated_profile", ""),
                 max_per_source=getattr(config, "federated_max_per_source", 25),
-                email=getattr(config, "openalex_email", ""),
+                openalex_email=getattr(config, "openalex_email", ""),
+                crossref_email=getattr(config, "crossref_email", ""),
+                semantic_scholar_api_key=getattr(config, "semantic_scholar_api_key", ""),
+                pubmed_api_key=getattr(config, "pubmed_api_key", ""),
             )
         else:
             wos_cfg = Configuration(api_key={"ClarivateApiKeyAuth": config.wos_api_key})

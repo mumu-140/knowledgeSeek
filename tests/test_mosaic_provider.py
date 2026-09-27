@@ -1,3 +1,4 @@
+import time
 import unittest
 from unittest.mock import patch
 
@@ -10,8 +11,6 @@ from paperseek_core.integrations.mosaic_provider import (
 
 
 class FakeMosaicPaper:
-    """Stand-in for mosaic.models.Paper built from keyword args."""
-
     def __init__(self, **kwargs):
         self.title = kwargs.get("title", "")
         self.authors = kwargs.get("authors", [])
@@ -32,72 +31,68 @@ class FakeMosaicPaper:
         self.relevance_score = kwargs.get("relevance_score")
         self.openalex_id = kwargs.get("openalex_id")
 
+    @property
+    def uid(self):
+        if self.doi:
+            return f"doi:{self.doi.lower()}"
+        if self.arxiv_id:
+            return f"arxiv:{self.arxiv_id}"
+        if self.pii:
+            return f"pii:{self.pii}"
+        return f"title:{self.title.lower()[:80]}"
+
     def to_dict(self):
-        return {k: getattr(self, k) for k in (
-            "title", "authors", "year", "doi", "arxiv_id", "pii", "abstract",
-            "journal", "volume", "issue", "pages", "pdf_url", "source",
-            "is_open_access", "url", "citation_count", "relevance_score",
-            "openalex_id",
-        )}
+        return {
+            key: getattr(self, key)
+            for key in (
+                "title", "authors", "year", "doi", "arxiv_id", "pii", "abstract",
+                "journal", "volume", "issue", "pages", "pdf_url", "source",
+                "is_open_access", "url", "citation_count", "relevance_score",
+                "openalex_id",
+            )
+        }
 
 
 class FakeSource:
-    def __init__(self, name, papers=None, error=None, available=True):
+    def __init__(self, name, papers=None, error=None, available=True, delay=0.0):
         self.name = name
         self._papers = papers or []
         self._error = error
         self._available = available
+        self.delay = delay
+        self.calls = 0
 
     def available(self):
         return self._available
 
     def search(self, query, max_results=25, filters=None):
+        self.calls += 1
+        if self.delay:
+            time.sleep(self.delay)
         if self._error:
             raise self._error
-        return list(self._papers)
+        return list(self._papers)[:max_results]
 
 
-class FakeMosaicModule:
-    """Duck-typed mosaic package: source_registry + search namespaces."""
-
-    class source_registry:
-        @staticmethod
-        def build_sources(cfg):
-            sources = []
-            for key, entry in cfg.get("sources", {}).items():
-                if not entry.get("enabled", True):
-                    continue
-                sources.append(FakeSource(entry.get("_display", key)))
-            return sources
-
-    class search:
-        @staticmethod
-        def search_all(sources, query, max_per_source=25, filters=None,
-                       errors=None, stats=None, parallel=True):
-            seen = {}
-            per_source = {}
-            raw_total = 0
-            for source in sources:
-                try:
-                    results = source.search(query, max_results=max_per_source, filters=filters)
-                except Exception as exc:
-                    if errors is not None:
-                        errors.append(f"{source.name}: {exc}")
-                    continue
-                per_source[source.name] = len(results)
-                raw_total += len(results)
-                for paper in results:
-                    uid = paper.doi or paper.title
-                    if uid not in seen:
-                        seen[uid] = paper
-            if stats is not None:
-                stats.update({
-                    "per_source": per_source,
-                    "raw_total": raw_total,
-                    "unique": len(seen),
-                    "merged": raw_total - len(seen),
-                })
-            return list(seen.values())
+class FakeServices:
+    @staticmethod
+    def merge_papers(seen, paper):
+        uid = paper.uid
+        if uid not in seen:
+            seen[uid] = paper
+            return
+        existing = seen[uid]
+        if paper.abstract and not existing.abstract:
+            existing.abstract = paper.abstract
+        if paper.pdf_url and not existing.pdf_url:
+            existing.pdf_url = paper.pdf_url
+        if paper.doi and not existing.doi:
+            existing.doi = paper.doi
+        if paper.citation_count is not None and (
+            existing.citation_count is None
+            or paper.citation_count > existing.citation_count
+        ):
+            existing.citation_count = paper.citation_count
 
 
 def fake_paper(**kwargs):
@@ -108,8 +103,7 @@ class MosaicFederatedProviderTest(unittest.TestCase):
     def _provider(self, **kwargs):
         return MosaicFederatedProvider(**kwargs)
 
-    def _search(self, provider, fake_sources, query="q", limit=50):
-        """Patch build_sources to return fake_sources, patch search_all via module."""
+    def _search(self, provider, fake_sources, query="q", limit=50, page=1):
         import paperseek_core.integrations.mosaic_provider as module
 
         class _Registry:
@@ -117,54 +111,24 @@ class MosaicFederatedProviderTest(unittest.TestCase):
             def build_sources(cfg):
                 return list(fake_sources)
 
-        class _Search:
-            @staticmethod
-            def search_all(sources, query, max_per_source=25, filters=None,
-                           errors=None, stats=None, parallel=True):
-                seen = {}
-                per_source = {}
-                raw_total = 0
-                for source in sources:
-                    try:
-                        results = source.search(query, max_results=max_per_source, filters=filters)
-                    except Exception as exc:
-                        if errors is not None:
-                            errors.append(f"{source.name}: {exc}")
-                        continue
-                    per_source[source.name] = len(results)
-                    raw_total += len(results)
-                    for paper in results:
-                        uid = paper.doi or paper.title
-                        if uid not in seen:
-                            seen[uid] = paper
-                if stats is not None:
-                    stats.update({
-                        "per_source": per_source,
-                        "raw_total": raw_total,
-                        "unique": len(seen),
-                        "merged": raw_total - len(seen),
-                    })
-                return list(seen.values())
-
         class _Mosaic:
             source_registry = _Registry
-            search = _Search
+            services = FakeServices
 
         with patch.object(module, "require_mosaic", return_value=_Mosaic):
-            return provider.search(query=query, limit=limit)
+            return provider.search(query=query, limit=limit, page=page)
 
     def test_multi_source_success_collects_stats(self):
         provider = self._provider()
         result = self._search(provider, [
-            FakeSource("OpenAlex", [fake_paper(title="A", doi="10.1/a")]),
-            FakeSource("Crossref", [fake_paper(title="B", doi="10.1/b")]),
+            FakeSource("OpenAlex", [fake_paper(title="A", doi="10.1/a", source="OpenAlex")]),
+            FakeSource("Crossref", [fake_paper(title="B", doi="10.1/b", source="Crossref")]),
         ])
         self.assertEqual(len(result.hits), 2)
         self.assertEqual(result.metadata.total, 2)
         self.assertEqual(provider.last_stats["raw_total"], 2)
         self.assertEqual(provider.last_stats["unique"], 2)
         self.assertEqual(provider.last_errors, [])
-        self.assertEqual(set(provider.last_stats["per_source"]), {"OpenAlex", "Crossref"})
 
     def test_one_source_timeout_does_not_abort(self):
         provider = self._provider()
@@ -194,44 +158,72 @@ class MosaicFederatedProviderTest(unittest.TestCase):
         self.assertEqual(len(result.hits), 1)
         self.assertEqual(provider.last_stats["per_source"].get("OpenAlex", 0), 0)
 
-    def test_same_doi_from_two_sources_merges(self):
+    def test_same_doi_from_two_sources_merges_and_tracks_provenance(self):
         provider = self._provider()
         result = self._search(provider, [
-            FakeSource("OpenAlex", [fake_paper(title="From OA", doi="10.1/dup", citation_count=5)]),
-            FakeSource("Crossref", [fake_paper(title="From CR", doi="10.1/dup")]),
+            FakeSource("OpenAlex", [
+                fake_paper(title="From OA", doi="10.1/dup", citation_count=5, source="OpenAlex")
+            ]),
+            FakeSource("Crossref", [
+                fake_paper(title="From CR", doi="10.1/dup", source="Crossref")
+            ]),
         ])
         self.assertEqual(len(result.hits), 1)
         self.assertEqual(provider.last_stats["raw_total"], 2)
         self.assertEqual(provider.last_stats["unique"], 1)
         self.assertEqual(provider.last_stats["merged"], 1)
+        self.assertEqual(result.hits[0].raw["mosaic_sources"], ["OpenAlex", "Crossref"])
 
     def test_complementary_metadata_from_two_sources(self):
         provider = self._provider()
         result = self._search(provider, [
-            FakeSource("OpenAlex", [fake_paper(title="X", doi="10.1/x", abstract=None, citation_count=7)]),
-            FakeSource("Europe PMC", [fake_paper(title="X ", doi="10.1/x", abstract="The abstract")]),
+            FakeSource("OpenAlex", [
+                fake_paper(
+                    title="X",
+                    doi="10.1/x",
+                    abstract=None,
+                    citation_count=7,
+                    source="OpenAlex",
+                )
+            ]),
+            FakeSource("Europe PMC", [
+                fake_paper(
+                    title="X alt",
+                    doi="10.1/x",
+                    abstract="The abstract",
+                    source="Europe PMC",
+                )
+            ]),
         ])
-        # Merge keeps richer metadata; adapter maps whatever survived.
-        self.assertLessEqual(len(result.hits), 2)
+        self.assertEqual(len(result.hits), 1)
+        self.assertEqual(result.hits[0].abstract, "The abstract")
 
     def test_mosaic_not_installed_raises_clear_error(self):
         import paperseek_core.integrations.mosaic_provider as module
         from paperseek_core.integrations.mosaic_adapter import MosaicNotInstalledError
 
         provider = self._provider()
-        with patch.object(module, "require_mosaic", side_effect=MosaicNotInstalledError("no mosaic")):
+        with patch.object(
+            module,
+            "require_mosaic",
+            side_effect=MosaicNotInstalledError("no mosaic"),
+        ):
             with self.assertRaises(MosaicNotInstalledError):
                 provider.search(query="q")
 
     def test_unavailable_sources_are_filtered_before_search(self):
         provider = self._provider()
+        unavailable = FakeSource(
+            "IEEE Xplore",
+            error=AssertionError("should not be searched"),
+            available=False,
+        )
         result = self._search(provider, [
             FakeSource("OpenAlex", [fake_paper(title="A", doi="10.1/a")]),
-            FakeSource("IEEE Xplore", error=AssertionError("should not be searched")),
+            unavailable,
         ])
-        # IEEE marked unavailable at construction via available() → skipped entirely.
-        # FakeSource default available=True, so mark it unavailable here:
         self.assertEqual(len(result.hits), 1)
+        self.assertEqual(unavailable.calls, 0)
 
     def test_unavailable_only_raises_provider_error(self):
         from paperseek_core.sources.providers import ProviderError
@@ -259,14 +251,89 @@ class MosaicFederatedProviderTest(unittest.TestCase):
         self.assertEqual(DEFAULT_PROFILE, "general")
 
     def test_unknown_profile_falls_back_to_general(self):
-        provider = MosaicFederatedProvider(profile="nonexistent")
+        provider = self._provider(profile="nonexistent")
         self.assertEqual(provider.profile, SOURCE_PROFILES["general"])
 
-    def test_limit_truncates_hits(self):
-        provider = self._provider()
-        papers = [fake_paper(title=f"P{i}", doi=f"10.1/p{i}") for i in range(10)]
-        result = self._search(provider, [FakeSource("OpenAlex", papers)], limit=3)
-        self.assertEqual(len(result.hits), 3)
+    def test_limit_pages_without_losing_total_pool(self):
+        provider = self._provider(max_per_source=4)
+        source_a = FakeSource(
+            "OpenAlex",
+            [fake_paper(title=f"A{i}", doi=f"10.1/a{i}", source="OpenAlex") for i in range(4)],
+        )
+        source_b = FakeSource(
+            "Crossref",
+            [fake_paper(title=f"B{i}", doi=f"10.1/b{i}", source="Crossref") for i in range(4)],
+        )
+        first = self._search(provider, [source_a, source_b], limit=3)
+        second = provider.search(query="q", limit=3, page=2)
+        third = provider.search(query="q", limit=3, page=3)
+
+        self.assertEqual(first.metadata.total, 8)
+        self.assertEqual(second.metadata.total, 8)
+        self.assertEqual([h.title for h in first.hits], ["A0", "B0", "A1"])
+        self.assertEqual([h.title for h in second.hits], ["B1", "A2", "B2"])
+        self.assertEqual([h.title for h in third.hits], ["A3", "B3"])
+        self.assertEqual(source_a.calls, 1)
+        self.assertEqual(source_b.calls, 1)
+
+    def test_larger_request_refreshes_snapshot(self):
+        provider = self._provider(max_per_source=2)
+        source = FakeSource(
+            "OpenAlex",
+            [fake_paper(title=f"P{i}", doi=f"10.1/p{i}") for i in range(6)],
+        )
+        first = self._search(provider, [source], limit=2)
+        self.assertEqual(first.metadata.total, 2)
+        with patch(
+            "paperseek_core.integrations.mosaic_provider.require_mosaic",
+            side_effect=AssertionError("cache refresh must call require_mosaic"),
+        ):
+            with self.assertRaises(AssertionError):
+                provider.search(query="q", limit=5)
+
+    def test_parallel_completion_does_not_change_merge_precedence(self):
+        provider = self._provider(parallel=True)
+        slow_first = FakeSource(
+            "OpenAlex",
+            [fake_paper(title="OpenAlex title", doi="10.1/x", source="OpenAlex")],
+            delay=0.03,
+        )
+        fast_second = FakeSource(
+            "Crossref",
+            [fake_paper(title="Crossref title", doi="10.1/x", source="Crossref")],
+        )
+        result = self._search(provider, [slow_first, fast_second])
+        self.assertEqual(result.hits[0].title, "OpenAlex title")
+        self.assertEqual(result.hits[0].raw["mosaic_sources"], ["OpenAlex", "Crossref"])
+
+    def test_existing_source_credentials_are_passed_to_mosaic_config(self):
+        captured = {}
+
+        class _Registry:
+            @staticmethod
+            def build_sources(cfg):
+                captured.update(cfg)
+                return [FakeSource("OpenAlex"), FakeSource("Crossref")]
+
+        class _Mosaic:
+            source_registry = _Registry
+
+        provider = self._provider(
+            profile="biomed",
+            openalex_email="oa@example.test",
+            crossref_email="cr@example.test",
+            semantic_scholar_api_key="ss-test-key",
+            pubmed_api_key="ncbi-test-key",
+        )
+        sources = provider._build_sources(_Mosaic)
+        self.assertEqual(
+            captured["sources"]["semantic_scholar"]["api_key"],
+            "ss-test-key",
+        )
+        self.assertEqual(captured["sources"]["pubmed"]["api_key"], "ncbi-test-key")
+        self.assertEqual(captured["sources"]["pmc"]["api_key"], "ncbi-test-key")
+        self.assertEqual(getattr(sources[0], "_email"), "oa@example.test")
+        self.assertEqual(getattr(sources[1], "_email"), "cr@example.test")
 
     def test_retrieval_capabilities_single_relevance_lane(self):
         from paperseek_core.retrieval import RetrievalLane

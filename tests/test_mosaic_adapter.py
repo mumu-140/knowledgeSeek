@@ -147,7 +147,7 @@ class MosaicAdapterTest(unittest.TestCase):
             make_paper(title="P3"),
         ]
         result = papers_to_provider_result(papers, limit=2)
-        self.assertEqual(result.metadata.total, 2)
+        self.assertEqual(result.metadata.total, 3)
         self.assertEqual(result.metadata.page, 1)
         self.assertEqual(result.metadata.limit, 2)
         self.assertEqual([h.title for h in result.hits], ["P1", "P2"])
@@ -173,23 +173,25 @@ class MosaicAdapterTest(unittest.TestCase):
             mosaic_paper_from_dict({"title": "x"})
         self.assertIn("paperseek[federated]", str(ctx.exception))
 
-    def test_papers_to_provider_result_ordering_is_deterministic(self):
-        # search_all returns merge order (thread completion under parallel
-        # fan-out); the adapter must emit a stable order before truncation so
-        # the same query yields the same first `limit` hits across runs.
-        low = make_paper(title="Low Cited Recent", doi="10.1/low", citation_count=1, year=2024)
-        high_old = make_paper(title="High Cited Old", doi="10.1/highold", citation_count=500, year=2001)
-        high_new = make_paper(title="High Cited New", doi="10.1/highnew", citation_count=500, year=2023)
-        for order in (
-            (low, high_old, high_new),
-            (high_new, low, high_old),  # different input order
-            (high_old, high_new, low),
-        ):
-            result = papers_to_provider_result(list(order), limit=0)
-            self.assertEqual(
-                [r.title for r in result.hits],
-                ["High Cited New", "High Cited Old", "Low Cited Recent"],
-            )
+    def test_papers_to_provider_result_preserves_order_and_pages(self):
+        papers = [
+            make_paper(title="First", doi="10.1/first", citation_count=1, year=2024),
+            make_paper(title="Second", doi="10.1/second", citation_count=500, year=2001),
+            make_paper(title="Third", doi="10.1/third", citation_count=500, year=2023),
+        ]
+        first = papers_to_provider_result(papers, limit=2, page=1)
+        second = papers_to_provider_result(papers, limit=2, page=2)
+        self.assertEqual(first.metadata.total, 3)
+        self.assertEqual([r.title for r in first.hits], ["First", "Second"])
+        self.assertEqual([r.title for r in second.hits], ["Third"])
+
+    def test_provenance_sources_are_preserved_in_raw(self):
+        paper = make_paper(title="Merged", doi="10.1/merged", source="OpenAlex")
+        result = papers_to_provider_result(
+            [paper],
+            provenance_by_uid={"doi:10.1/merged": ["OpenAlex", "Crossref"]},
+        )
+        self.assertEqual(result.hits[0].raw["mosaic_sources"], ["OpenAlex", "Crossref"])
 
 
 if __name__ == "__main__":
