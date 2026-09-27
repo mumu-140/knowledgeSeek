@@ -1,7 +1,7 @@
 # KnowledgeSeek × MOSAIC 最小侵入式联邦检索集成计划
 
 - 日期：2026-09-24
-- 状态：Proposed / ready for implementation
+- 状态：Implemented locally; Phase 10 correctness audit passed; GitHub/py3.11 federated CI pending push
 - 目标仓库：mumu-140/knowledgeSeek
 - 参考仓库：szaghi/mosaic
 - 推荐实施分支：feat/mosaic-federated-provider
@@ -1078,4 +1078,41 @@ Codex 每完成一个 Phase 都在这里追加：
 - 下一步：Phase 9 文档收尾（README/README.en.md、user-manual、deployment 说明与源元数据一致性核对）。
 
 （Phase 8 收尾备忘：下一阶段先 `git add -A && git commit`，随后进入 Phase 9。）
+
+### Phase 10 — Integration correctness fixes
+- 时间：2026-09-27
+- 起始 KnowledgeSeek SHA：a1affa1293f163bd1217e534a0996346131358b0
+- MOSAIC SHA：64b991927e5124c964a29f3103eb6b506c44e8d8（只读，未修改）
+- 审计触发：Phase 0–9 收尾复核发现三项集成正确性风险：
+  1. MosaicFederatedProvider 接受 page 但未分页，adapter 又在进入 RRF 前按 citation/year 排序并截断，导致 MOSAIC 完整多源池无法真正进入 KnowledgeSeek RRF。
+  2. MOSAIC search_all 的并行 future 完成顺序会影响 merge_papers 的首记录来源，source/author/year/journal 等字段与 provenance 存在线程完成顺序非确定性。
+  3. KnowledgeSeek 已有 semantic_scholar_api_key / pubmed_api_key / openalex_email / crossref_email 未透传到 federated provider。
+- 修复：
+  - provider 首次检索构建并缓存完整 merged snapshot，metadata.total 返回完整候选池；后续 page=2,3... 只分页读取快照，不重复网络查询。
+  - 删除 adapter 中 citation/year 预排序；MOSAIC 不再承担第二套 ranking，候选进入 KnowledgeSeek 后再由 RRF/BM25/embedding/reranker/LLM 处理。
+  - 保留并行 source retrieval，但检索结果先按 source 收集，再按“source 内 rank × profile source 顺序”进行确定性 round-robin merge；使用 MOSAIC services.merge_papers 完成 metadata 补全。
+  - merged PaperRecord.raw 新增 mosaic_sources，记录全部贡献 source；mosaic_source 保留主记录来源。
+  - federated provider 复用 KnowledgeSeek 已有 Semantic Scholar / PubMed key 与 OpenAlex / Crossref polite-pool email；没有新增凭据体系。
+  - mosaic-search optional extra 限定为 >=1.5.5,<1.6，避免 MOSAIC registry 行为变化在未审计时自动进入当前 adapter。
+  - benchmark 改为通过 provider 的真实 page contract 收集完整可访问池，new_unique 不再混用“截断前 stats”和“截断后 records”。
+- 测试：
+  - 目标测试：43 passed, 65 subtests passed。
+  - 完整回归：217 passed, 1 skipped, 85 subtests passed（py3.10 + workspace sqlite shim；exit 0）。
+  - 新增/加强契约：完整 pool pagination、page cache 不重复查询、跨源 DOI merge、mosaic_sources provenance、并行完成顺序不改变 merge precedence、现有 API 配置透传。
+- 真实网络 correctness benchmark：
+  - 输出：/home/yangs/software/knowledgeSeek-mosaic-20260924/phase10-benchmark-results.json
+  - 10 个固定 query；其中 8/10 实际跨越 >1 page。
+  - 所有 query 均满足 provider accessible unique == MOSAIC source_unique == metadata.total，证明完整 merged pool 可由 KnowledgeSeek 分页读取。
+  - 平均 federated accessible unique = 102.8；平均 baseline unique = 31.7；平均 new unique = 90.7；平均 federated source-call latency = 3.51 s。
+  - 稳定可比样例：bio-02 为 157 个可访问候选，其中 117 个不在 OpenAlex baseline 前 40；exact-01 为 108 个候选、70 个新增且目标 DOI 命中；exact-02 为 88 个候选、48 个新增且目标 DOI 命中。
+  - 公共 API 状态仍是主要外部变量：Semantic Scholar 持续 429；部分查询 OpenAlex 429；cs profile 的 arXiv 406 / DBLP 非 JSON 仍由 source failure isolation 吸收。2/10 baseline 查询因 OpenAlex 429 失败，因此本轮 benchmark 只用于 integration correctness，不作为检索质量优劣结论。
+- 提交：
+  - 4bfded1 fix: preserve federated candidate pool through pagination
+  - 0afbe18 test: align federated benchmark with paged candidate pool
+- Gate 10：PASS（集成正确性）；Python 3.11 正式 optional-extra 安装/CI 仍 PENDING。
+- 未完成的外部验证：
+  - fwq10ys 无法访问 PyPI，现有 .venv-ks311 缺 httpx 等依赖，不能在该环境完成 pip install "paperseek[federated]" 的发布路径验证。
+  - GitHub 当前无法 push，因此新增 federated Python 3.11 CI job 尚未真正运行。待恢复 push 后，以 GitHub CI 结果作为最终 packaging gate。
+- 是否偏离计划：否；本阶段只修正审计发现的 integration correctness 问题，没有引入 RAG/PDF/UI 重构或第二套 ranking。
+- 下一步：保持当前分支，不再增加功能；恢复 GitHub 推送能力后 push 全部分阶段提交并跑 CI，CI 全绿后再合并 main。
 
