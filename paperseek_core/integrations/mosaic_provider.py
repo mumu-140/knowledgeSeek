@@ -61,10 +61,9 @@ class MosaicFederatedProvider:
         semantic_scholar_api_key: str = "",
         pubmed_api_key: str = "",
     ):
-        self.profile = SOURCE_PROFILES.get(
-            (profile or "").strip().lower(),
-            SOURCE_PROFILES[DEFAULT_PROFILE],
-        )
+        profile_key = (profile or "").strip().lower()
+        self.profile_name = profile_key if profile_key in SOURCE_PROFILES else DEFAULT_PROFILE
+        self.profile = SOURCE_PROFILES[self.profile_name]
         self.max_per_source = max(1, int(max_per_source or 25))
         self.parallel = bool(parallel)
 
@@ -101,6 +100,7 @@ class MosaicFederatedProvider:
         limit: int = 50,
         page: int = 1,
         lane: str = RetrievalLane.RELEVANCE,
+        event_handler: Optional[Any] = None,
         **kwargs: Any,
     ):
         query = (query or "").strip()
@@ -117,7 +117,7 @@ class MosaicFederatedProvider:
             query != self._snapshot_query
             or fetch_per_source > self._snapshot_fetch_per_source
         ):
-            self._refresh_snapshot(query, fetch_per_source)
+            self._refresh_snapshot(query, fetch_per_source, event_handler=event_handler)
 
         self.last_stats = dict(self._snapshot_stats)
         self.last_errors = list(self._snapshot_errors)
@@ -130,7 +130,7 @@ class MosaicFederatedProvider:
             provenance_by_uid=self._snapshot_provenance,
         )
 
-    def _refresh_snapshot(self, query: str, fetch_per_source: int) -> None:
+    def _refresh_snapshot(self, query: str, fetch_per_source: int, event_handler: Optional[Any] = None) -> None:
         mosaic = require_mosaic()
         sources = self._build_sources(mosaic)
         active = [source for source in sources if source.available()]
@@ -148,6 +148,7 @@ class MosaicFederatedProvider:
             active,
             query=query,
             max_per_source=fetch_per_source,
+            event_handler=event_handler,
         )
         latency = time.time() - started
 
@@ -166,6 +167,7 @@ class MosaicFederatedProvider:
         *,
         query: str,
         max_per_source: int,
+        event_handler: Optional[Any] = None,
     ) -> Tuple[List[Any], Dict[str, List[str]], List[str], Dict[str, Any]]:
         """Query sources concurrently, then merge in deterministic rank order.
 
@@ -177,6 +179,42 @@ class MosaicFederatedProvider:
         results_by_source: Dict[str, List[Any]] = {}
         errors: List[str] = []
 
+        def _friendly_status(count: int, exc: Optional[Exception] = None) -> Tuple[str, str]:
+            if exc is not None:
+                err_str = str(exc).strip()
+                err_lower = err_str.lower()
+                if "429" in err_str or "rate limit" in err_lower or "too many requests" in err_lower:
+                    return "rate-limited", "Rate limited (429)"
+                if "timeout" in err_lower or "timed out" in err_lower:
+                    return "error", "Request timed out"
+                if "404" in err_str:
+                    return "empty", "0 papers"
+                if "50" in err_str or "502" in err_str or "503" in err_str or "server error" in err_lower:
+                    return "error", "Upstream server error"
+                return "error", f"Error: {err_str[:40]}"
+            if count == 0:
+                return "empty", "0 papers"
+            return "success", f"{count} papers"
+
+        source_details: Dict[str, Dict[str, Any]] = {
+            source.name: {"status": "searching", "count": 0, "detail": "Querying..."}
+            for source in active
+        }
+
+        if event_handler:
+            event_handler({
+                "type": "stage",
+                "stage": "federated_retrieval",
+                "status": "processing",
+                "data": {
+                    "profile": getattr(self, "profile_name", "general"),
+                    "sources": dict(source_details),
+                    "raw_total": 0,
+                    "unique": 0,
+                    "merged": 0,
+                },
+            })
+
         def run(source: Any) -> List[Any]:
             return list(source.search(query, max_results=max_per_source, filters=None) or [])
 
@@ -187,15 +225,51 @@ class MosaicFederatedProvider:
                 for future in as_completed(futures):
                     source = futures[future]
                     try:
-                        results_by_source[source.name] = future.result()
+                        res = future.result()
+                        results_by_source[source.name] = res
+                        st, dt = _friendly_status(len(res))
+                        source_details[source.name] = {"status": st, "count": len(res), "detail": dt}
                     except Exception as exc:
                         errors.append(f"{source.name}: {exc}")
+                        st, dt = _friendly_status(0, exc)
+                        source_details[source.name] = {"status": st, "count": 0, "detail": dt}
+                    if event_handler:
+                        event_handler({
+                            "type": "stage",
+                            "stage": "federated_retrieval",
+                            "status": "processing",
+                            "data": {
+                                "profile": getattr(self, "profile_name", "general"),
+                                "sources": dict(source_details),
+                                "raw_total": sum(s["count"] for s in source_details.values()),
+                                "unique": 0,
+                                "merged": 0,
+                            },
+                        })
         else:
             for source in active:
                 try:
-                    results_by_source[source.name] = run(source)
+                    res = run(source)
+                    results_by_source[source.name] = res
+                    st, dt = _friendly_status(len(res))
+                    source_details[source.name] = {"status": st, "count": len(res), "detail": dt}
                 except Exception as exc:
                     errors.append(f"{source.name}: {exc}")
+                    st, dt = _friendly_status(0, exc)
+                    source_details[source.name] = {"status": st, "count": 0, "detail": dt}
+                if event_handler:
+                    event_handler({
+                        "type": "stage",
+                        "stage": "federated_retrieval",
+                        "status": "processing",
+                        "data": {
+                            "profile": getattr(self, "profile_name", "general"),
+                            "sources": dict(source_details),
+                            "raw_total": sum(s["count"] for s in source_details.values()),
+                            "unique": 0,
+                            "merged": 0,
+                        },
+                    })
 
         per_source = {
             source.name: len(results_by_source[source.name])
@@ -222,12 +296,29 @@ class MosaicFederatedProvider:
 
         papers = list(seen.values())
         stats = {
+            "profile": getattr(self, "profile_name", "general"),
             "per_source": per_source,
+            "source_status": {k: v["status"] for k, v in source_details.items()},
+            "source_details": source_details,
             "raw_total": raw_total,
             "unique": len(papers),
             "merged": raw_total - len(papers),
             "after_filters": len(papers),
+            "errors": errors,
         }
+        if event_handler:
+            event_handler({
+                "type": "stage",
+                "stage": "federated_retrieval",
+                "status": "complete",
+                "data": {
+                    "profile": getattr(self, "profile_name", "general"),
+                    "sources": dict(source_details),
+                    "raw_total": raw_total,
+                    "unique": len(papers),
+                    "merged": raw_total - len(papers),
+                },
+            })
         return papers, provenance, errors, stats
 
     def _build_sources(self, mosaic: Any) -> List[Any]:

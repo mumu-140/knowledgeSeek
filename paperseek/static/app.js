@@ -131,6 +131,13 @@ const translations = {
     "RRF k Parameter": "RRF 融合参数 k",
     "Settings for active retrieval source": "当前检索数据源专属设置",
     "What literature are you looking for?": "需要检索哪些学术文献？请输入研究课题、意图或核心概念...",
+    "Federated Retrieval": "多源联合检索",
+    "Concurrent multi-source retrieval and deduplication powered by MOSAIC.": "基于 MOSAIC 引擎的多源并发检索与去重合并。",
+    "Waiting to start federated multi-source retrieval.": "等待开始多源联合检索...",
+    "Raw candidates": "原始候选",
+    "Unique after merge": "去重后唯一文献",
+    "Duplicates merged": "已合并重复篇数",
+    "Sources": "检索源清单",
     "OpenAlex API Key": "OpenAlex API Key",
     "Optional if anonymous access is available": "匿名访问可用时可选",
     "OpenAlex Email": "OpenAlex 邮箱",
@@ -1347,6 +1354,18 @@ function createWorkflowState() {
       query: "",
       body: emptyState("No query generated yet."),
     },
+    federated: {
+      number: "02",
+      title: "Federated Retrieval",
+      status: "WAITING",
+      description: "Concurrent multi-source retrieval and deduplication powered by MOSAIC.",
+      profile: "general",
+      sources: {},
+      raw_total: 0,
+      unique: 0,
+      merged: 0,
+      body: emptyState("Waiting to start federated multi-source retrieval."),
+    },
     search: {
       number: "02",
       title: "Source Request",
@@ -1410,10 +1429,16 @@ function renderWorkflow() {
     return;
   }
 
-  workflow.innerHTML = stageOrder.map((key) => {
-    const item = workflowState[key];
+  const currentSource = (dataSourceSelect && dataSourceSelect.value) ? dataSourceSelect.value : "federated";
+  const activeStages = currentSource === "federated"
+    ? ["query", "federated", "ranking", "results"]
+    : ["query", "search", "ranking", "results"];
+
+  workflow.innerHTML = activeStages.map((key, idx) => {
+    const item = workflowState[key] || {};
+    const num = `0${idx + 1}`;
     const extra = item.status === "PROCESSING" ? "processing-card" : item.status === "ERROR" ? "error-card" : "";
-    return workflowCard(item.number, item.title, item.status, item.description, item.body, extra);
+    return workflowCard(num, item.title || "", item.status || "WAITING", item.description || "", item.body || "", extra);
   }).join("");
 
   applyLanguage(workflow);
@@ -1421,7 +1446,11 @@ function renderWorkflow() {
 }
 
 function renderStepLabel() {
-  const activeIndex = stageOrder.findIndex((key) => workflowState[key].status === "PROCESSING");
+  const currentSource = (dataSourceSelect && dataSourceSelect.value) ? dataSourceSelect.value : "federated";
+  const activeStages = currentSource === "federated"
+    ? ["query", "federated", "ranking", "results"]
+    : ["query", "search", "ranking", "results"];
+  const activeIndex = activeStages.findIndex((key) => workflowState[key] && workflowState[key].status === "PROCESSING");
   if (activeIndex >= 0) {
     stepLabel.textContent = activeLanguage === "zh" ? `步骤 ${activeIndex + 1}/4` : `Step ${activeIndex + 1}/4`;
   } else if (workflowState.results.status === "READY" || workflowState.results.status === "EMPTY") {
@@ -1475,6 +1504,84 @@ function metricRow(items) {
       <span>${escapeHtml(translatedText(item.label))}</span>
     </div>
   `).join("")}</div>`;
+}
+
+function renderFederatedStage(item) {
+  const profileName = item.profile ? String(item.profile).toUpperCase() : "GENERAL";
+  const profileDisplay = {
+    biomed: "Biomedical",
+    cs: "Computer Science",
+    general: "General",
+  }[String(item.profile).toLowerCase()] || profileName;
+
+  const sources = item.sources || {};
+  const entries = Object.entries(sources);
+
+  let sourcesListHtml = "";
+  if (entries.length === 0) {
+    sourcesListHtml = emptyState("Connecting to federated scholarly sources...");
+  } else {
+    sourcesListHtml = entries.map(([name, info]) => {
+      const status = String(info.status || "searching").toLowerCase();
+      const count = Number(info.count || 0);
+      const detail = String(info.detail || "").trim();
+
+      let badgeHtml = "";
+      if (status === "searching") {
+        badgeHtml = `<span class="source-status-badge searching"><span class="source-spinner"></span> Searching...</span>`;
+      } else if (status === "success") {
+        badgeHtml = `<span class="source-status-badge success"><span class="icon-check">✓</span> ${count}</span>`;
+      } else if (status === "empty") {
+        badgeHtml = `<span class="source-status-badge empty">0 papers</span>`;
+      } else if (status === "rate-limited") {
+        badgeHtml = `<span class="source-status-badge rate-limited" title="${escapeHtml(detail)}"><span class="icon-warn">⚠</span> ${escapeHtml(detail || "Rate limited (429)")}</span>`;
+      } else if (status === "skipped") {
+        badgeHtml = `<span class="source-status-badge skipped" title="${escapeHtml(detail)}">— ${escapeHtml(detail || "Skipped")}</span>`;
+      } else {
+        badgeHtml = `<span class="source-status-badge error" title="${escapeHtml(detail)}"><span class="icon-err">✕</span> ${escapeHtml(detail || "Error")}</span>`;
+      }
+
+      return `
+        <div class="federated-source-row status-${escapeHtml(status)}">
+          <span class="source-name">${escapeHtml(name)}</span>
+          <div class="source-status-wrap">${badgeHtml}</div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  const rawTotal = item.raw_total || 0;
+  const unique = item.unique || 0;
+  const merged = item.merged || 0;
+
+  return `
+    <div class="federated-stage-content">
+      <div class="federated-stage-header">
+        <span class="federated-stage-label">${escapeHtml(translatedText("Profile"))}</span>
+        <strong class="federated-stage-profile">${escapeHtml(profileDisplay)}</strong>
+      </div>
+
+      <div class="federated-stage-sources">
+        <div class="sources-header">${escapeHtml(translatedText("Sources"))}</div>
+        <div class="sources-grid">${sourcesListHtml}</div>
+      </div>
+
+      <div class="federated-stage-stats">
+        <div class="stat-item">
+          <span class="stat-number">${rawTotal}</span>
+          <span class="stat-caption">${escapeHtml(translatedText("Raw candidates"))}</span>
+        </div>
+        <div class="stat-item highlight">
+          <span class="stat-number">${unique}</span>
+          <span class="stat-caption">${escapeHtml(translatedText("Unique after merge"))}</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-number">${merged}</span>
+          <span class="stat-caption">${escapeHtml(translatedText("Duplicates merged"))}</span>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function renderRankingStage(item) {
@@ -2274,6 +2381,20 @@ function bindCitationGraphInteractions(container) {
 }
 
 function applyStageEvent(event) {
+  if (event.stage === "federated_retrieval") {
+    const stage = workflowState.federated;
+    stage.status = (event.status || "processing").toUpperCase();
+    if (event.data) {
+      if (event.data.profile) stage.profile = event.data.profile;
+      if (event.data.sources) stage.sources = event.data.sources;
+      if (event.data.raw_total !== undefined) stage.raw_total = event.data.raw_total;
+      if (event.data.unique !== undefined) stage.unique = event.data.unique;
+      if (event.data.merged !== undefined) stage.merged = event.data.merged;
+    }
+    stage.body = renderFederatedStage(stage);
+    renderWorkflow();
+    return;
+  }
   const stage = workflowState[event.stage];
   if (!stage) {
     return;
@@ -2350,6 +2471,16 @@ function applyFinalResult(data) {
   `;
 
   workflowState.search.status = "COMPLETE";
+  if (data.federated_stats) {
+    const stage = workflowState.federated;
+    stage.status = "COMPLETE";
+    stage.profile = data.federated_profile || data.federated_stats.profile || "general";
+    stage.sources = data.federated_stats.source_details || data.federated_stats.sources || {};
+    stage.raw_total = data.federated_stats.raw_total || 0;
+    stage.unique = data.federated_stats.unique || 0;
+    stage.merged = data.federated_stats.merged || 0;
+    stage.body = renderFederatedStage(stage);
+  }
   workflowState.search.body = renderHistory(data.history, data.final_query, []);
   workflowState.search.description = `Accepted query returned ${data.total} total records.`;
 

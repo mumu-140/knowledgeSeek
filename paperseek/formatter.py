@@ -89,6 +89,8 @@ def ranked_items_to_dict(items: list) -> list:
             "citations": str(result.citation_count) if result.citation_count else "",
             "reasoning": result.relevance_reason,
             "pdf_url": result.pdf_url,
+            "mosaic_sources": result.mosaic_sources,
+            "mosaic_source": result.mosaic_source,
         })
         output.append(row)
     return output

@@ -195,7 +195,7 @@ def safe_search_params_from_config(config: AgentConfig) -> dict[str, Any]:
 def result_payload_from_search_result(result: dict[str, Any], source: str) -> dict[str, Any]:
     from paperseek.formatter import ranked_items_to_dict
 
-    return {
+    payload = {
         "question": result["question"],
         "search_intent": result.get("search_intent", ""),
         "source": result.get("source", source),
@@ -206,8 +206,16 @@ def result_payload_from_search_result(result: dict[str, Any], source: str) -> di
         "iterations": result["iterations"],
         "history": result.get("history", []),
         "citation_map": result.get("citation_map", {}),
+        "ranking_steps": result.get("ranking_steps", []),
         "ranked": ranked_items_to_dict(result["ranked"]),
     }
+    if "federated_stats" in result:
+        payload["federated_stats"] = result["federated_stats"]
+    if "federated_errors" in result:
+        payload["federated_errors"] = result["federated_errors"]
+    if "federated_profile" in result:
+        payload["federated_profile"] = result["federated_profile"]
+    return payload
 
 
 def _as_int(value: Any) -> Optional[int]:

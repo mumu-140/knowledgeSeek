@@ -160,6 +160,8 @@ class PaperResult:
     retrieval_lanes: List[str] = field(default_factory=list)
     source_raw_id: str = ""
     links: Dict[str, str] = field(default_factory=dict)
+    mosaic_sources: List[str] = field(default_factory=list)
+    mosaic_source: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -186,6 +188,10 @@ def ranked_entry_to_result(entry: Dict[str, Any], rank: int) -> PaperResult:
     venue = getattr(source, "source_title", "") if source else ""
     authors, year, venue = normalize_google_scholar_metadata(provider, authors, year, venue)
 
+    raw = safe_get(doc, "raw", {}) or {}
+    mosaic_sources = [str(x) for x in raw.get("mosaic_sources", []) if x]
+    mosaic_source = str(raw.get("mosaic_source", "") or "")
+
     return PaperResult(
         rank=rank,
         source=provider,
@@ -208,6 +214,8 @@ def ranked_entry_to_result(entry: Dict[str, Any], rank: int) -> PaperResult:
         retrieval_lanes=[str(value) for value in (entry.get("retrieval_lanes") or []) if value],
         source_raw_id=safe_get(doc, "uid"),
         links=links,
+        mosaic_sources=mosaic_sources,
+        mosaic_source=mosaic_source,
     )
 
 

@@ -893,7 +893,7 @@ class PaperSeekAgent:
 
         self._emit_stage("results", "complete", ranked_count=len(ranked), total=total)
 
-        return {
+        result_payload = {
             "question": question,
             "search_intent": self.search_intent,
             "final_query": query,
@@ -907,6 +907,11 @@ class PaperSeekAgent:
             "ranking_steps": list(self.ranking_steps.values()),
             "ranked": ranked,
         }
+        if self.data_source == "federated" and hasattr(self.provider, "last_stats"):
+            result_payload["federated_stats"] = getattr(self.provider, "last_stats", None)
+            result_payload["federated_errors"] = getattr(self.provider, "last_errors", [])
+            result_payload["federated_profile"] = getattr(self.provider, "profile_name", getattr(self.config, "federated_profile", "general"))
+        return result_payload
 
     def _provider_search(self, query: str):
         return self._provider_search_lane(query, RetrievalLane.RELEVANCE, self._candidate_limit(), page=1)
@@ -1110,7 +1115,7 @@ class PaperSeekAgent:
         if self.data_source == "crossref":
             return self._call_provider_search(query=query, limit=limit, page=page, lane=lane)
         if self.provider:
-            return self._call_provider_search(query=query, limit=limit, page=page, lane=lane)
+            return self._call_provider_search(query=query, limit=limit, page=page, lane=lane, event_handler=self.event_handler)
         sort_field = self._wos_sort_field_for_lane(lane)
         try:
             return self.documents_api.documents_get(
