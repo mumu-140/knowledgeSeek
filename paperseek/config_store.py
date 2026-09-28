@@ -8,6 +8,8 @@ from typing import Dict, Iterable, List
 
 CONFIG_KEYS = {
     "DATA_SOURCE",
+    "FEDERATED_PROFILE",
+    "FEDERATED_MAX_PER_SOURCE",
     "WOS_API_KEY",
     "OPENALEX_API_KEY",
     "OPENALEX_EMAIL",

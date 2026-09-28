@@ -141,8 +141,11 @@
           <!-- Advanced Settings Collapsible -->
           <details id="advancedSettings" class="config-advanced">
             <summary>
-              <span class="advanced-summary-title">Advanced settings</span>
-              <small class="advanced-summary-desc">Retrieval · Ranking · Citations · LLM · Source keys</small>
+              <div class="advanced-summary-header">
+                <span class="advanced-summary-title">Advanced settings</span>
+                <small class="advanced-summary-desc">Retrieval · Ranking · Citations · LLM · Source keys</small>
+              </div>
+              <span id="configSavedBadge" class="config-saved-badge" title="Settings are remembered in your browser">💾 Remembered</span>
             </summary>
 
             <div class="config-advanced-body">
@@ -409,6 +412,22 @@
                     <span>WoS DB</span>
                     <input id="wosDb" type="text" value="WOS" autocomplete="off">
                   </label>
+                </div>
+              </div>
+
+              <!-- Persistence Bar -->
+              <div class="config-persistence-bar">
+                <div class="persistence-status">
+                  <span class="persistence-icon">💾</span>
+                  <span id="configPersistenceText">Settings auto-saved in browser</span>
+                </div>
+                <div class="persistence-actions">
+                  <button type="button" id="resetConfigBtn" class="btn-persistence-action" title="Clear saved settings and restore server defaults">
+                    Reset to Defaults
+                  </button>
+                  <button type="button" id="saveServerConfigBtn" class="btn-persistence-action highlight" title="Save current settings to server configuration">
+                    Save to Server
+                  </button>
                 </div>
               </div>
             </div>

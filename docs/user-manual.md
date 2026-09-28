@@ -1572,6 +1572,18 @@ Find empirical studies on how digital platforms influence open innovation in fir
 - **Check Config**：在发起检索前进行本地静态配置与连通性校验，确保必填凭据完备。
 - **Run Search**：发起端到端检索与重排。
 
+#### 配置持久化与自动保存（Config Persistence）
+
+为解决每次打开或刷新浏览器都需要重新输入 API Key、切换 Provider 和挑选模型的困扰，Web UI 提供了双层持久化机制：
+
+1. **浏览器自动静默保存（LocalStorage Auto-Save）**：
+   - 用户在界面上修改的任何参数（检索模式、Federated Profile、Target Scale、LLM Provider、Model、Base URL、API Key、各源密钥等），均会在发生变更时自动保存至当前浏览器的本地缓存。
+   - **下次打开或刷新页面时，系统会自动恢复所有上次使用的设置与模型**，无需重复配置。
+   - 高级设置右上角醒目标识 `💾 Remembered（已记住配置）`。
+2. **重置与服务器端持久化**：
+   - **Reset to Defaults（恢复默认设置）**：一键清除当前浏览器已保存的自定义配置，恢复至服务器环境变量或初始默认值。
+   - **Save to Server（保存到服务器）**：将当前界面所有设置直接写入服务端的全局配置（`~/.config/paperseek/config.json`），以便跨浏览器和 CLI 命令共享默认参数。
+
 ---
 
 ### Federated Retrieval 实时可视化
@@ -2407,4 +2419,4 @@ paperseek search "your question" --source openalex --json > papers.json
 
 ### Web UI 会保存我的 Key 吗？
 
-不会。Web UI 表单值只用于当前会话。CLI 的 `paperseek config set` 会保存到本地用户级配置文件，这是用户主动执行的行为。
+Web UI 默认在**当前浏览器本地缓存（localStorage）**中记住用户配置，方便下次打开直接使用，无需重复输入；只有当用户在 Advanced settings 中显式点击“Save to Server”或使用 CLI `paperseek config set` 时，配置才会写入服务器用户级配置文件。点击“Reset to Defaults”可随时清除浏览器已存配置。

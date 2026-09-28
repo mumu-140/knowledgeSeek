@@ -1,3 +1,5 @@
+import tempfile
+from pathlib import Path
 from paperseek.providers import PaperAuthor, PaperCitation, PaperIdentifiers, PaperLinks, PaperNames, PaperRecord, PaperSource
 import unittest
 from unittest.mock import patch
@@ -490,6 +492,31 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(data["source"], "preset")
         self.assertIn("gpt-4o", data["models"])
         self.assertIn("warning", data)
+
+
+    def test_config_save_endpoint_persists_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with temporary_env(
+                {"PAPERSEEK_CONFIG_FILE": str(Path(tmp) / "config.json")},
+                clear=CONFIG_ENV_KEYS,
+            ):
+                response = self.client.post(
+                    "/api/config/save",
+                    json={
+                        "settings": {
+                            "LLM_PROVIDER": "deepseek",
+                            "LLM_MODEL": "deepseek-chat",
+                            "FEDERATED_PROFILE": "biomed",
+                            "FEDERATED_MAX_PER_SOURCE": 35,
+                        }
+                    },
+                )
+                self.assertEqual(response.status_code, 200)
+                data = response.json()
+                self.assertEqual(data["status"], "ok")
+                self.assertEqual(data["saved_count"], 4)
+                self.assertIn("LLM_PROVIDER", data["keys"])
+                self.assertIn("FEDERATED_PROFILE", data["keys"])
 
 
 if __name__ == "__main__":

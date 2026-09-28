@@ -13,6 +13,12 @@ const modelInput = document.getElementById("llmModel");
 const fetchModelsBtn = document.getElementById("fetchModelsBtn");
 const llmModelList = document.getElementById("llmModelList");
 const fetchModelsFeedback = document.getElementById("fetchModelsFeedback");
+const configSavedBadge = document.getElementById("configSavedBadge");
+const configPersistenceText = document.getElementById("configPersistenceText");
+const resetConfigBtn = document.getElementById("resetConfigBtn");
+const saveServerConfigBtn = document.getElementById("saveServerConfigBtn");
+const userConfigStorageKey = "paperseek.ui.user_config";
+let configSaveTimer = null;
 const baseUrlInput = document.getElementById("llmBaseUrl");
 const retrievalEmbeddingProviderSelect = document.getElementById("retrievalEmbeddingProvider");
 const retrievalEmbeddingModelInput = document.getElementById("retrievalEmbeddingModel");
@@ -68,6 +74,15 @@ const translations = {
     "Fetched": "已成功获取",
     "Fetch failed": "获取模型失败",
     "Using preset models": "使用预设模型",
+    "Settings auto-saved in browser": "配置已自动保存在当前浏览器，下次打开无需重复配置",
+    "Save to Server": "保存到服务器",
+    "Reset to Defaults": "恢复默认设置",
+    "Saved settings to server configuration": "已成功保存配置到服务器",
+    "Cleared browser configuration and restored defaults": "已清除浏览器配置并恢复默认设置",
+    "Failed to save to server": "保存到服务器失败",
+    "Remembered": "已记住配置",
+    "Saving...": "保存中...",
+    "Reset": "已重置",
     "Processing": "处理中",
     "Searching": "检索中",
     "Stopping": "停止中",
@@ -1170,6 +1185,232 @@ function updateCredentialPlaceholders() {
   }
 }
 
+
+function notifyConfigSaved(isSaved) {
+  if (configSavedBadge) {
+    if (isSaved) {
+      configSavedBadge.textContent = "💾 " + getTranslatedText("Remembered");
+      configSavedBadge.classList.remove("saving");
+    } else {
+      configSavedBadge.textContent = "⟳ " + getTranslatedText("Saving...");
+      configSavedBadge.classList.add("saving");
+    }
+  }
+}
+
+function saveUserConfigToLocal() {
+  if (!window.localStorage) return;
+  notifyConfigSaved(false);
+  clearTimeout(configSaveTimer);
+  configSaveTimer = setTimeout(() => {
+    try {
+      const mode = (modePillFederated && modePillFederated.classList.contains("active")) ? "federated" : "single";
+      const config = {
+        workspace_mode: mode,
+        data_source: mode === "federated" ? "federated" : getValue("dataSource"),
+        federated_profile: (federatedProfileInput ? federatedProfileInput.value : "") || (federatedProfileSelect ? federatedProfileSelect.value : "") || "general",
+        federated_max_per_source: federatedMaxPerSourceInput ? Number(federatedMaxPerSourceInput.value) : 25,
+        target_scale: targetScaleSelect ? targetScaleSelect.value : "20",
+        target_min: getNumber("targetMin"),
+        target_max: getNumber("targetMax"),
+        max_iterations: getNumber("maxIterations"),
+        retrieval_rrf_k: getNumber("retrievalRrfK"),
+        retrieval_pool_max: getNumber("retrievalPoolMax"),
+        llm_provider: getValue("llmProvider"),
+        llm_model: getValue("llmModel"),
+        llm_api_type: getValue("llmApiType"),
+        llm_base_url: getValue("llmBaseUrl"),
+        llm_api_key: getValue("llmApiKey"),
+        expand_citations: document.getElementById("expandCitations") ? document.getElementById("expandCitations").checked : true,
+        fetch_abstracts: document.getElementById("fetchAbstracts") ? document.getElementById("fetchAbstracts").checked : false,
+        wos_api_key: getValue("wosApiKey"),
+        openalex_api_key: getValue("openAlexApiKey"),
+        openalex_email: getValue("openAlexEmail"),
+        crossref_email: getValue("crossrefEmail"),
+        semantic_scholar_api_key: getValue("semanticScholarApiKey"),
+        pubmed_api_key: getValue("pubmedApiKey"),
+        pubmed_email: getValue("pubmedEmail"),
+        pubmed_tool: getValue("pubmedTool"),
+        serper_api_key: getValue("serperApiKey"),
+        wos_db: getValue("wosDb"),
+        search_field: getValue("searchField"),
+        retrieval_embedding_provider: getValue("retrievalEmbeddingProvider"),
+        retrieval_embedding_model: getValue("retrievalEmbeddingModel"),
+        retrieval_embedding_base_url: getValue("retrievalEmbeddingBaseUrl"),
+        retrieval_embedding_api_key: getValue("retrievalEmbeddingApiKey"),
+        retrieval_reranker_provider: getValue("retrievalRerankerProvider"),
+        retrieval_reranker_model: getValue("retrievalRerankerModel"),
+        retrieval_reranker_base_url: getValue("retrievalRerankerBaseUrl"),
+        retrieval_reranker_api_key: getValue("retrievalRerankerApiKey"),
+      };
+      window.localStorage.setItem(userConfigStorageKey, JSON.stringify(config));
+      notifyConfigSaved(true);
+      if (configPersistenceText) {
+        configPersistenceText.textContent = getTranslatedText("Settings auto-saved in browser");
+      }
+    } catch (e) {
+      console.warn("Failed to save to localStorage:", e);
+    }
+  }, 250);
+}
+
+function restoreUserConfigFromLocal() {
+  if (!window.localStorage) return false;
+  try {
+    const raw = window.localStorage.getItem(userConfigStorageKey);
+    if (!raw) return false;
+    const config = JSON.parse(raw);
+    if (!config || typeof config !== "object") return false;
+
+    if (config.workspace_mode) {
+      setWorkspaceMode(config.workspace_mode);
+    }
+    if (config.data_source && dataSourceSelect) {
+      dataSourceSelect.value = config.data_source;
+    }
+    if (config.federated_profile) {
+      setFederatedProfile(config.federated_profile);
+    }
+    if (config.federated_max_per_source && federatedMaxPerSourceInput) {
+      federatedMaxPerSourceInput.value = Number(config.federated_max_per_source);
+    }
+    if (config.target_scale && targetScaleSelect) {
+      targetScaleSelect.value = config.target_scale;
+    }
+    if (Number.isFinite(Number(config.target_min)) && document.getElementById("targetMin")) {
+      document.getElementById("targetMin").value = Number(config.target_min);
+    }
+    if (Number.isFinite(Number(config.target_max)) && document.getElementById("targetMax")) {
+      document.getElementById("targetMax").value = Number(config.target_max);
+    }
+    if (Number.isFinite(Number(config.max_iterations)) && document.getElementById("maxIterations")) {
+      document.getElementById("maxIterations").value = Number(config.max_iterations);
+    }
+    if (Number.isFinite(Number(config.retrieval_rrf_k)) && document.getElementById("retrievalRrfK")) {
+      document.getElementById("retrievalRrfK").value = Number(config.retrieval_rrf_k);
+    }
+    if (Number.isFinite(Number(config.retrieval_pool_max)) && document.getElementById("retrievalPoolMax")) {
+      document.getElementById("retrievalPoolMax").value = Number(config.retrieval_pool_max);
+    }
+    if (config.llm_provider && providerSelect) {
+      providerSelect.value = config.llm_provider;
+      updateModelDatalist(providerModelPresets[config.llm_provider] || []);
+    }
+    if (config.llm_api_type && apiTypeSelect) {
+      apiTypeSelect.value = config.llm_api_type;
+    }
+    if (config.llm_model && modelInput) {
+      modelInput.value = config.llm_model;
+    }
+    if (config.llm_base_url && baseUrlInput) {
+      baseUrlInput.value = config.llm_base_url;
+    }
+    if (config.llm_api_key && apiKeyInput) {
+      apiKeyInput.value = config.llm_api_key;
+    }
+    if (document.getElementById("expandCitations") && config.expand_citations !== undefined) {
+      document.getElementById("expandCitations").checked = Boolean(config.expand_citations);
+    }
+    if (document.getElementById("fetchAbstracts") && config.fetch_abstracts !== undefined) {
+      document.getElementById("fetchAbstracts").checked = Boolean(config.fetch_abstracts);
+    }
+
+    const setVal = (id, val) => {
+      const el = document.getElementById(id);
+      if (el && val !== undefined && val !== null) el.value = val;
+    };
+    setVal("wosApiKey", config.wos_api_key);
+    setVal("openAlexApiKey", config.openalex_api_key);
+    setVal("openAlexEmail", config.openalex_email);
+    setVal("crossrefEmail", config.crossref_email);
+    setVal("semanticScholarApiKey", config.semantic_scholar_api_key);
+    setVal("pubmedApiKey", config.pubmed_api_key);
+    setVal("pubmedEmail", config.pubmed_email);
+    setVal("pubmedTool", config.pubmed_tool);
+    setVal("serperApiKey", config.serper_api_key);
+    setVal("wosDb", config.wos_db);
+    setVal("searchField", config.search_field);
+
+    setVal("retrievalEmbeddingProvider", config.retrieval_embedding_provider);
+    setVal("retrievalEmbeddingModel", config.retrieval_embedding_model);
+    setVal("retrievalEmbeddingBaseUrl", config.retrieval_embedding_base_url);
+    setVal("retrievalEmbeddingApiKey", config.retrieval_embedding_api_key);
+    setVal("retrievalRerankerProvider", config.retrieval_reranker_provider);
+    setVal("retrievalRerankerModel", config.retrieval_reranker_model);
+    setVal("retrievalRerankerBaseUrl", config.retrieval_reranker_base_url);
+    setVal("retrievalRerankerApiKey", config.retrieval_reranker_api_key);
+
+    notifyConfigSaved(true);
+    return true;
+  } catch (e) {
+    console.warn("Failed to restore from localStorage:", e);
+    return false;
+  }
+}
+
+async function handleResetConfig() {
+  if (window.localStorage) {
+    window.localStorage.removeItem(userConfigStorageKey);
+  }
+  await loadServerDefaults();
+  if (configPersistenceText) {
+    configPersistenceText.textContent = getTranslatedText("Cleared browser configuration and restored defaults");
+  }
+  if (configSavedBadge) {
+    configSavedBadge.textContent = "⟳ " + getTranslatedText("Reset");
+  }
+}
+
+async function handleSaveServerConfig() {
+  if (!saveServerConfigBtn) return;
+  saveServerConfigBtn.disabled = true;
+  const payload = buildPayload();
+  const settings = {
+    DATA_SOURCE: payload.data_source,
+    FEDERATED_PROFILE: payload.federated_profile,
+    FEDERATED_MAX_PER_SOURCE: String(payload.federated_max_per_source),
+    LLM_PROVIDER: payload.llm_provider,
+    LLM_MODEL: payload.llm_model,
+    LLM_API_TYPE: payload.llm_api_type,
+    LLM_BASE_URL: payload.llm_base_url,
+    TARGET_MIN: String(payload.target_min),
+    TARGET_MAX: String(payload.target_max),
+    MAX_ITERATIONS: String(payload.max_iterations),
+    EXPAND_CITATIONS: payload.expand_citations ? "true" : "false",
+    RETRIEVAL_POOL_MAX: String(payload.retrieval_pool_max || 3000),
+    RETRIEVAL_RRF_K: String(payload.retrieval_rrf_k || 60),
+  };
+  if (payload.llm_api_key) settings.LLM_API_KEY = payload.llm_api_key;
+  if (payload.wos_api_key) settings.WOS_API_KEY = payload.wos_api_key;
+  if (payload.openalex_api_key) settings.OPENALEX_API_KEY = payload.openalex_api_key;
+  if (payload.openalex_email) settings.OPENALEX_EMAIL = payload.openalex_email;
+  if (payload.crossref_email) settings.CROSSREF_EMAIL = payload.crossref_email;
+  if (payload.semantic_scholar_api_key) settings.SEMANTIC_SCHOLAR_API_KEY = payload.semantic_scholar_api_key;
+  if (payload.pubmed_api_key) settings.PUBMED_API_KEY = payload.pubmed_api_key;
+  if (payload.pubmed_email) settings.PUBMED_EMAIL = payload.pubmed_email;
+  if (payload.pubmed_tool) settings.PUBMED_TOOL = payload.pubmed_tool;
+  if (payload.serper_api_key) settings.SERPER_API_KEY = payload.serper_api_key;
+
+  try {
+    const res = await fetch("/api/config/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (configPersistenceText) {
+      configPersistenceText.textContent = `✓ ${getTranslatedText("Saved settings to server configuration")} (${data.saved_count || 0})`;
+    }
+  } catch (err) {
+    if (configPersistenceText) {
+      configPersistenceText.textContent = `✕ ${getTranslatedText("Failed to save to server")}: ${err.message || err}`;
+    }
+  } finally {
+    saveServerConfigBtn.disabled = false;
+  }
+}
+
 async function loadServerDefaults() {
   try {
     const response = await fetch("/api/config/defaults");
@@ -1215,10 +1456,12 @@ async function loadServerDefaults() {
     }
     document.getElementById("fetchAbstracts").checked = Boolean(data.fetch_abstracts);
     document.getElementById("expandCitations").checked = Boolean(data.expand_citations);
+    restoreUserConfigFromLocal();
     updateSourceFields();
     updateCredentialPlaceholders();
     updateSourceSummary();
   } catch (_) {
+    restoreUserConfigFromLocal();
     updateCredentialPlaceholders();
     updateSourceSummary();
   }
@@ -3044,6 +3287,7 @@ function applyProviderDefaults() {
     fetchModelsFeedback.className = "field-subnote";
   }
   updateCredentialPlaceholders();
+  saveUserConfigToLocal();
 }
 
 providerSelect.addEventListener("change", applyProviderDefaults);
@@ -3071,6 +3315,24 @@ if (retrievalRerankerProviderSelect) {
 
 if (fetchModelsBtn) {
   fetchModelsBtn.addEventListener("click", handleFetchModels);
+}
+
+
+if (form) {
+  form.addEventListener("change", (e) => {
+    if (e.target && e.target.id === "question") return;
+    saveUserConfigToLocal();
+  });
+  form.addEventListener("input", (e) => {
+    if (e.target && e.target.id === "question") return;
+    saveUserConfigToLocal();
+  });
+}
+if (resetConfigBtn) {
+  resetConfigBtn.addEventListener("click", handleResetConfig);
+}
+if (saveServerConfigBtn) {
+  saveServerConfigBtn.addEventListener("click", handleSaveServerConfig);
 }
 
 if (stopButton) {
