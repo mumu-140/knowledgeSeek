@@ -138,6 +138,10 @@ const translations = {
     "Unique after merge": "去重后唯一文献",
     "Duplicates merged": "已合并重复篇数",
     "Sources": "检索源清单",
+    "Found in:": "检出于：",
+    "Source:": "数据源：",
+    "Why relevant": "相关性解读",
+    "Show abstract": "查看摘要",
     "OpenAlex API Key": "OpenAlex API Key",
     "Optional if anonymous access is available": "匿名访问可用时可选",
     "OpenAlex Email": "OpenAlex 邮箱",
@@ -1594,35 +1598,55 @@ function renderRankingStage(item) {
     { value: item.status || "WAITING", label: "RANKING STATUS" },
     { value: getValue("dataSource").toUpperCase(), label: "SOURCE" },
   ]);
+
   if (!item.rankingSteps || item.rankingSteps.length === 0) {
     return `${metrics}${emptyState("Waiting for ranking progress.")}`;
   }
-  const rows = item.rankingSteps.map((step) => {
+
+  const nodes = item.rankingSteps.map((step) => {
     const total = Number(step.total || 0);
     const current = Number(step.current || 0);
     const percent = total > 0 ? Math.max(0, Math.min(100, Math.round((current / total) * 100))) : 0;
     const hasProgress = total > 0 && ["processing", "complete"].includes(String(step.status || "").toLowerCase());
     const stepTitle = translatedRuntimeText(step.title || step.id || "Ranking step");
-    const stepStatus = translatedStatusText(step.status || "processing");
+    const rawStatus = String(step.status || "processing").toLowerCase();
+    const stepStatus = translatedStatusText(rawStatus);
     const stepDetail = translatedRuntimeText(step.detail || "");
-    const meta = [
-      total > 0 ? `${current}/${total}` : "",
-      step.concurrency ? (activeLanguage === "zh" ? `并发 ${step.concurrency}` : `concurrency ${step.concurrency}`) : "",
-      step.candidate_count ? (activeLanguage === "zh" ? `${step.candidate_count} 个候选` : `${step.candidate_count} candidates`) : "",
-    ].filter(Boolean).join(" · ");
+
+    let metaCount = "";
+    if (step.candidate_count) {
+      metaCount = activeLanguage === "zh" ? `${step.candidate_count} 个候选` : `${step.candidate_count} candidates`;
+    } else if (total > 0 && current > 0) {
+      metaCount = activeLanguage === "zh" ? `${current}/${total} 处理完成` : `${current}/${total} processed`;
+    }
+
+    let statusModifier = rawStatus;
+    if (stepDetail.includes("fallback") || stepDetail.includes("sparse")) {
+      statusModifier = "fallback";
+    } else if (stepDetail.includes("skipped") || stepDetail.includes("Not enabled")) {
+      statusModifier = "skipped";
+    }
+
     return `
-      <section class="ranking-step-row ${escapeHtml(String(step.status || "processing").toLowerCase())}">
-        <div class="ranking-step-topline">
-          <strong>${escapeHtml(stepTitle)}</strong>
-          <span class="action-pill ${escapeHtml(String(step.status || "processing").toLowerCase())}">${escapeHtml(stepStatus)}</span>
+      <div class="pipeline-node ${escapeHtml(statusModifier)}">
+        <div class="node-left">
+          <span class="node-dot"></span>
+          <span class="node-connector"></span>
         </div>
-        ${stepDetail ? `<p>${escapeHtml(stepDetail)}</p>` : ""}
-        ${meta ? `<small>${escapeHtml(meta)}</small>` : ""}
-        ${hasProgress ? `<div class="progress-bar" aria-label="${escapeHtml(`${stepTitle} ${translatedRuntimeText("progress")}`)}"><span style="width: ${percent}%"></span></div>` : ""}
-      </section>
+        <div class="node-content">
+          <div class="node-top">
+            <strong class="node-name">${escapeHtml(stepTitle)}</strong>
+            <span class="node-status-pill ${escapeHtml(statusModifier)}">${escapeHtml(stepStatus)}</span>
+          </div>
+          ${metaCount ? `<div class="node-meta">${escapeHtml(metaCount)}</div>` : ""}
+          ${stepDetail ? `<div class="node-detail">${escapeHtml(stepDetail)}</div>` : ""}
+          ${hasProgress ? `<div class="progress-bar"><span style="width: ${percent}%"></span></div>` : ""}
+        </div>
+      </div>
     `;
   }).join("");
-  return `${metrics}<div class="ranking-step-list">${rows}</div>`;
+
+  return `${metrics}<div class="pipeline-flow">${nodes}</div>`;
 }
 
 function renderHistory(history, finalQuery, preview) {
@@ -1713,6 +1737,55 @@ function renderPapers(papers) {
   `;
 }
 
+function renderCompactSummary(res) {
+  if (!res) return "";
+  const stats = res.federated_stats;
+  const rankedCount = (res.ranked || []).length;
+  const poolCount = (res.citation_map && res.citation_map.candidate_pool) || (stats && stats.unique) || res.total || rankedCount;
+
+  let summaryParts = [];
+  if (stats) {
+    const sourceCount = Object.keys(stats.per_source || stats.source_details || {}).length;
+    summaryParts.push(activeLanguage === "zh"
+      ? `从 ${sourceCount} 个源检索到 ${stats.unique} 篇去重文献`
+      : `Found ${stats.unique} unique papers from ${sourceCount} sources`);
+    if (stats.merged > 0) {
+      summaryParts.push(activeLanguage === "zh"
+        ? `合并 ${stats.merged} 篇重复文献`
+        : `${stats.merged} duplicates merged`);
+    }
+  } else {
+    summaryParts.push(activeLanguage === "zh"
+      ? `共检索到 ${res.total || rankedCount} 篇文献`
+      : `Found ${res.total || rankedCount} total papers`);
+  }
+
+  summaryParts.push(activeLanguage === "zh"
+    ? `${poolCount} 篇进入排序流水线`
+    : `${poolCount} papers entered ranking pipeline`);
+  summaryParts.push(activeLanguage === "zh"
+    ? `展示前 ${rankedCount} 篇最终文献`
+    : `${rankedCount} final papers shown`);
+
+  let warningHtml = "";
+  if (res.federated_errors && res.federated_errors.length > 0) {
+    const errorText = res.federated_errors.join("; ");
+    warningHtml = `
+      <div class="summary-warning-line">
+        <span>⚠</span>
+        <span>${activeLanguage === "zh" ? "检索结果为部分结果（部分数据源受限）：" : "Results are partial: "}${escapeHtml(errorText)}</span>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="compact-summary-banner">
+      <div class="summary-stats-line">${summaryParts.join(" · ")}</div>
+      ${warningHtml}
+    </div>
+  `;
+}
+
 function renderResultsView() {
   const allPapers = latestResult && latestResult.ranked ? latestResult.ranked : [];
   if (!latestResult) {
@@ -1731,6 +1804,8 @@ function renderResultsView() {
 
   const filtered = getFilteredPapers();
   const selectedCount = selectedPapers().length;
+  const summaryBox = renderCompactSummary(latestResult);
+
   return `
     <section class="workspace-view results-view">
       <div class="workspace-header">
@@ -1743,6 +1818,7 @@ function renderResultsView() {
           <span>${escapeHtml(selectedCount)} ${escapeHtml(translatedText("selected"))}</span>
         </div>
       </div>
+      ${summaryBox}
       <div class="results-toolbar">
         <input id="resultSearch" type="search" value="${escapeHtml(resultFilters.query)}" placeholder="${escapeHtml(translatedText("Search title, author, abstract, DOI"))}">
         <select id="resultMinScore">
@@ -1774,36 +1850,78 @@ function renderResultsView() {
 function renderResultRows(papers) {
   return `
     <div class="review-list">
-      ${papers.map((paper) => {
+      ${papers.map((paper, index) => {
         const id = paperId(paper);
         const checked = selectedPaperIds.has(id) ? " checked" : "";
-        const authors = paper.authors && paper.authors.length ? paper.authors.slice(0, 8).join(", ") : translatedText("No author metadata");
-        const meta = [
-          `${translatedText("Rank")} ${paper.rank || ""}`,
-          paper.score !== undefined ? `${paper.score}/10` : "",
-          paper.publish_year || "",
-          paper.citations ? `${paper.citations} ${translatedText("citations")}` : "",
-          paper.source || "",
-        ].filter(Boolean).join(" | ");
-        const record = paper.links && paper.links.record ? `<a href="${escapeHtml(paper.links.record)}" target="_blank" rel="noreferrer">${escapeHtml(translatedText("Record"))}</a>` : "";
-        const pdf = paper.links && paper.links.pdf ? `<a href="${escapeHtml(paper.links.pdf)}" target="_blank" rel="noreferrer">PDF</a>` : "";
-        return `
-          <details class="review-row" open>
-            <summary>
-              <input class="paper-select" type="checkbox" value="${escapeHtml(id)}"${checked} aria-label="${escapeHtml(translatedText("Select paper"))}">
-              <span class="score">${escapeHtml(paper.score ?? 0)}/10</span>
-              <span class="paper-title">${escapeHtml(paper.title || "(no title)")}</span>
-            </summary>
-            <div class="paper-body">
-              <p>${escapeHtml(authors)}</p>
-              <p>${escapeHtml(meta)}</p>
-              ${paper.doi ? `<p><strong>DOI:</strong> ${escapeHtml(paper.doi)}</p>` : ""}
-              ${paper.keywords ? `<p><strong>${escapeHtml(translatedText("Keywords:"))}</strong> ${escapeHtml(paper.keywords)}</p>` : ""}
-              ${paper.abstract ? `<p><strong>${escapeHtml(translatedText("Abstract:"))}</strong> ${escapeHtml(paper.abstract.slice(0, 1400))}${paper.abstract.length > 1400 ? "..." : ""}</p>` : ""}
-              ${paper.reasoning ? `<p><strong>${escapeHtml(translatedText("Reasoning:"))}</strong> ${escapeHtml(paper.reasoning)}</p>` : ""}
-              <div class="paper-links">${record} ${pdf}</div>
+        const authors = paper.authors && paper.authors.length ? paper.authors.slice(0, 5).join(", ") + (paper.authors.length > 5 ? " et al." : "") : translatedText("No author metadata");
+
+        let provenanceHtml = "";
+        if (paper.mosaic_sources && paper.mosaic_sources.length > 0) {
+          const chips = paper.mosaic_sources.map(s => `<span class="provenance-chip">${escapeHtml(s)}</span>`).join("");
+          provenanceHtml = `
+            <div class="provenance-strip">
+              <span class="provenance-label">${escapeHtml(translatedText("Found in:"))}</span>
+              <div class="provenance-tags">${chips}</div>
             </div>
-          </details>
+          `;
+        } else if (paper.provider || paper.source) {
+          provenanceHtml = `
+            <div class="provenance-strip">
+              <span class="provenance-label">${escapeHtml(translatedText("Source:"))}</span>
+              <div class="provenance-tags"><span class="provenance-chip">${escapeHtml(paper.provider || paper.source)}</span></div>
+            </div>
+          `;
+        }
+
+        const actions = [];
+        if (paper.doi) {
+          actions.push(`<a class="action-btn doi" href="https://doi.org/${encodeURI(paper.doi)}" target="_blank" rel="noopener">DOI: ${escapeHtml(paper.doi)}</a>`);
+        }
+        if (paper.pdf_url || (paper.links && paper.links.pdf)) {
+          const pdfLink = paper.pdf_url || paper.links.pdf;
+          actions.push(`<a class="action-btn pdf" href="${escapeHtml(pdfLink)}" target="_blank" rel="noopener">📄 PDF</a>`);
+        }
+        if (paper.links && (paper.links.record || paper.links.landing_page)) {
+          const recLink = paper.links.record || paper.links.landing_page;
+          actions.push(`<a class="action-btn record" href="${escapeHtml(recLink)}" target="_blank" rel="noopener">↗ ${escapeHtml(translatedText("Record"))}</a>`);
+        }
+
+        return `
+          <article class="paper-card">
+            <div class="card-header">
+              <div class="card-title-row">
+                <input class="paper-select" type="checkbox" value="${escapeHtml(id)}"${checked} aria-label="${escapeHtml(translatedText("Select paper"))}">
+                <span class="rank-badge">#${escapeHtml(paper.rank || (index + 1))}</span>
+                <h3 class="paper-title">${escapeHtml(paper.title || "(no title)")}</h3>
+                <span class="score-pill">${escapeHtml(paper.score ?? 0)}/10</span>
+              </div>
+              <div class="paper-meta-line">
+                <span class="authors">${escapeHtml(authors)}</span>
+                <span class="meta-dot">·</span>
+                <span class="year">${escapeHtml(paper.publish_year || "Unknown")}</span>
+                ${paper.source ? `<span class="meta-dot">·</span><span class="venue">${escapeHtml(paper.source)}</span>` : ""}
+                ${paper.citations ? `<span class="citation-tag">${escapeHtml(paper.citations)} citations</span>` : ""}
+              </div>
+            </div>
+
+            ${provenanceHtml}
+
+            ${paper.reasoning ? `
+              <div class="paper-relevance-box">
+                <div class="relevance-label">${escapeHtml(translatedText("Why relevant"))}</div>
+                <p class="relevance-body">${escapeHtml(paper.reasoning)}</p>
+              </div>
+            ` : ""}
+
+            ${paper.abstract ? `
+              <details class="abstract-details">
+                <summary class="abstract-toggle">${escapeHtml(translatedText("Show abstract"))}</summary>
+                <div class="abstract-content">${escapeHtml(paper.abstract)}</div>
+              </details>
+            ` : ""}
+
+            ${actions.length ? `<div class="card-actions-bar">${actions.join(" ")}</div>` : ""}
+          </article>
         `;
       }).join("")}
     </div>
