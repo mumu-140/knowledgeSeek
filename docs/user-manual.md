@@ -1474,172 +1474,212 @@ Web UI 由四个页面组成：
 
 ### Search 页面
 
-Search 页面左侧是输入和配置，右侧是工作流和日志。
+Search 页面采用以科研探索工作流为核心的清晰架构：
+
+```text
+Research question
+    ↓
+Search configuration
+    ↓
+Retrieval progress & Federated source status
+    ↓
+Candidate merge & Ranking pipeline
+    ↓
+Final papers
+```
+
+默认界面保持极简与高信息密度，避免平铺冗余表单参数；所有高级配置按逻辑类别分层收纳，按需展开。
 
 #### Research Question
 
-输入研究问题。建议写成一到三句话，包含：
+核心视觉层置顶一个显眼的大输入框：
+**“What literature are you looking for?”**
 
+输入研究问题。建议写成一到三句话，包含：
 - 主题概念。
 - 研究对象。
 - 场景或领域。
 - 方法、理论或时间范围。
 
 示例：
-
 ```text
 Find empirical studies on how digital platforms influence open innovation in firms.
 ```
-
-中文也可以：
-
+中文同样支持：
 ```text
 查找数字平台如何影响企业开放式创新的实证研究。
 ```
 
-#### Discipline Fields
+#### Search Mode 与 Federated Search
 
-`Source Filter` 位于 Search 页面 Research Question 下方，默认显示 `Any filter`。它会随数据源变化：OpenAlex 显示 OpenAlex Field，WoS 显示 Web of Science Category，arXiv 显示 arXiv Category；没有可靠硬过滤的数据源显示 `Field/context hint` 输入框。
+输入框下方提供直观的检索模式切换：
+- **Federated Search（多源联合检索，powered by MOSAIC）**：推荐模式。自动跨多个权威数据库扇出检索，智能对齐去重，再由 KnowledgeSeek 统一融合重排。
+- **Single Source（单源检索）**：针对特定数据库（如 OpenAlex、arXiv、PubMed 等）进行单点精准检索。
 
-Web UI 会从 `/api/disciplines` 加载各数据源的过滤模式和选项，并把本次选择随请求提交给后端。环境变量 `DISCIPLINE_FIELDS` 设置的默认值会在页面加载时按当前 `DATA_SOURCE` 归一化；浏览器会话中的选择不会写回 `.env` 或用户级配置文件。
+当选择 **Federated Search** 时，可切换对应的专业 Profile：
 
-如果当前数据源没有可靠硬过滤，使用 `Field/context hint` 给 LLM 一个宽松领域提示；如果当前数据源支持原生过滤，使用对应的 Source Filter 收窄结果。
+| Profile | 面向领域 | 覆盖数据源 |
+| --- | --- | --- |
+| **Biomedical** | 生物医药与生命科学 | PubMed · Europe PMC · PMC · OpenAlex · Semantic Scholar · bioRxiv · Crossref |
+| **Computer Science** | 计算机科学与信息技术 | OpenAlex · Semantic Scholar · arXiv · DBLP · Crossref |
+| **General** | 通用学术多学科 | OpenAlex · Semantic Scholar · Crossref · DOAJ |
 
-#### Data Source
+并可直接调节 `Max per source`（每源最大候选抓取数，默认 25）。
 
-选择：
+#### 目标结果规模（Target Scale）
 
-- `OpenAlex (precise search)`
-- `arXiv (preprints)`
-- `Semantic Scholar (broad scholarly graph)`
-- `PubMed (biomedical literature)`
-- `Google Scholar (via Serper)`
-- `Computer science top conferences`
-- `Crossref (metadata / DOI registry)`
-- `Web of Science Starter`
+默认显示目标文献量设置：
+- `Min Results`（默认 5）
+- `Max Results`（默认 20）
 
-不同数据源会显示不同字段：
+#### Discipline Fields（学科/领域过滤）
 
-| 数据源 | 显示字段 |
-| --- | --- |
-| OpenAlex | OpenAlex API Key、OpenAlex Email、OpenAlex Field、Expand citations |
-| arXiv | arXiv Category |
-| Semantic Scholar | Semantic Scholar API Key、Field/context hint |
-| PubMed | PubMed API Key、PubMed Email、PubMed Tool、Field/context hint |
-| Google Scholar | Serper API Key、Field/context hint |
-| 计算机顶会 | Field/context hint |
-| Crossref | Crossref Email、Field/context hint |
-| WoS Starter | WoS API Key、WoS DB、Web of Science Category、Try external abstracts |
+在单源检索模式下，`Source Filter` 位于配置栏上方，会随当前数据源智能联动：
+- **OpenAlex**：显示 OpenAlex 官方 26 个学科大类（如 Computer Science, Medicine, Engineering）。
+- **Web of Science**：显示 Web of Science 分类。
+- **arXiv**：显示 arXiv 分类。
+- **其他数据源**：自动切换为宽松的文本提示框（Field / Context hint），辅助 LLM 规范化检索式。
 
-`Source Filter` 位于 Research Question 下方，会随所选数据源按 [Discipline Fields](#discipline-fields) 中说明的规则切换为原生过滤或文本提示。
+#### 高级设置分层（Advanced Settings）
 
-#### LLM Settings
+所有深层配置均折叠在 `Advanced settings` 抽屉中，按功能明确划分为五组，避免表单混乱：
 
-字段：
+1. **Retrieval**：
+   - 检索候选池上限（`Retrieval pool max`，默认 3000）
+   - 单路召回上限（`Retrieval lane limit`，默认 1000）
+   - 搜索迭代轮次（`Max iterations`，默认 5）
+2. **Ranking**：
+   - RRF 倒数秩融合参数（`Retrieval RRF k`，默认 60）
+   - 密集嵌入检索模型与 Provider（`Embedding model / provider`）
+   - 外部重排模型（`Reranker model`）
+3. **Citation expansion**：
+   - 引用扩展开关（`Expand citations`）
+   - 前向引用与后向参考文献邻居控制
+4. **LLM**：
+   - LLM Provider（如 deepseek, openai, siliconflow, ollama 等）
+   - API Type（`openai_chat`, `openai_response` 等）
+   - Model 名称
+   - Base URL 与 API Key
+   - 最大生成 Token 数（`Max tokens`）
+5. **Source-specific**：
+   - 仅在对应数据源激活时动态展示（如 OpenAlex Email / API Key、PubMed Tool / Email、WoS API Key、Serper Key 等）。未选择的数据源专用凭据绝不平铺干扰界面。
 
-- Provider
-- API Type
-- Model
-- Base URL
-- API Key
+#### Check Config 与 Run Search
 
-选择 Provider 后，Web UI 会填入默认 Model、API Type 和 Base URL。你可以手动修改。
+- **Check Config**：在发起检索前进行本地静态配置与连通性校验，确保必填凭据完备。
+- **Run Search**：发起端到端检索与重排。
 
-#### Run Parameters
+---
 
-字段：
+### Federated Retrieval 实时可视化
 
-- Min Results
-- Max Results
-- Iterations
-- Try external abstracts
-- Expand citations
+当执行 Federated Search 时，界面实时展开专用的 **Federated Retrieval panel**，直观呈现多源抓取的全过程：
 
-建议：
+#### 多源状态实时追踪（Sources Grid）
 
-- `Min Results` 默认 `5`。
-- `Max Results` 默认 `50`。
-- `Iterations` 默认 `5`。
-- 首次使用 OpenAlex 时保留 `Expand citations` 开启。
-- 如果想减少请求次数，可关闭 `Expand citations`。
+清晰展示当前 Profile 下每个数据源的独立并发状态：
+- `Pending`（排队等待）
+- `Searching`（正在查询）
+- `Success ✓ [count]`（检索成功并返回具体命中数，如 `PubMed ✓ 25`）
+- `Empty - 0`（检索完成但未命中相关文献）
+- `Rate limited ⚠ 429`（触发源端频控限流，如 Semantic Scholar 429）
+- `Error / Skipped ✕`（源端网络异常或被跳过）
 
-#### Check Config
+#### 智能合并与去重统计（Candidate Merge Stats）
 
-`Check Config` 用于静态诊断。它不会发起真实文献检索，适合检查：
+实时汇总候选文献的清洗对齐指标：
+- **Raw candidates**：各源并发返回的原始文献总数。
+- **Unique after merge**：经跨源标识符（DOI / Title / Authors）对齐去重后的独立文献数量。
+- **Duplicates merged**：成功识别并合并的重复文献数量。
 
-- Research Question 是否填写。
-- Data Source 是否支持。
-- LLM API Key 是否缺失。
-- API Type 是否支持。
-- Base URL 是否有效。
-- 目标结果范围是否有效。
+#### 源端部分失败容错（Partial Failure Tolerance）
 
-#### Run Search
+若个别数据源发生速率限制（429）或连接超时，系统会在面板中清晰标记警示标签，但**不会中断整次搜索**；系统会自动基于其余成功源返回的候选集继续执行后续的融合与重排，确保检索任务的高可用性。
 
-点击 `Run Search` 后：
+---
 
-- 页面进入 Processing。
-- 右侧工作流逐步更新。
-- System Dashboard 输出日志。
-- 如果选择了 Discipline Fields，Source Request 日志会显示实际应用的 OpenAlex field filter、arXiv `cat:` 限制，或 WoS / 其他数据源的 query context。
-- 完成后 Results 页面可查看结果。
+### Ranking Pipeline 流程可视化
 
-### Workflow 区域
+KnowledgeSeek 将文献排序的全流程显式化为立体的流水线步骤（Pipeline Nodes）：
 
-工作流包含四步：
+```text
+Retrieval (候选集)
+    ↓
+RRF fusion (多路融合)
+    ↓
+Embedding similarity (语义向量相似度)
+    ↓
+Reranking (深度重排)
+    ↓
+LLM ranking (大模型细粒度评估)
+    ↓
+Final results (最终输出论文)
+```
 
-| 步骤 | 含义 |
-| --- | --- |
-| Query Generation | LLM 生成数据源查询。 |
-| Source Request | 请求数据源并记录命中数量。 |
-| Metadata Ranking | 多路召回预重排、embedding 相似度、RRF 融合、LLM 批量评分、可选摘要补全和引用扩展后处理。 |
-| Literature Results | 展示结果摘要，并引导进入 Results。 |
+每个节点实时显示：
+- 当前阶段处理的候选文献数量流转（例如 `112 candidates` → `80 candidates` → `20 papers`）。
+- 若某个阶段未配置或降级，节点明确展示真实状态（例如 `Local sparse fallback` 或 `External reranker: Not enabled`），杜绝伪造状态。
 
-运行中每一步会显示当前状态和阶段产物。`Metadata Ranking` 会把耗时较长的子步骤拆开显示，例如候选准备、多路召回、Embedding similarity、RRF fusion、External reranker、LLM ranking batches、Citation expansion reranking 和 Abstract enrichment；需要多批次 LLM 打分的步骤会显示已完成批次和总批次。
+---
 
-### System Dashboard
+### 搜索中的实时工作流与日志
 
-Search 页面右下角日志面板显示：
+在检索运行期间，页面顶部或工作流区实时指示核心阶段：
+1. **Understanding question**（解析研究意图）
+2. **Generating search query**（生成精准检索式）
+3. **Searching sources**（并发请求多数据源）
+4. **Merging duplicate papers**（跨源文献去重与元数据对齐）
+5. **Retrieval fusion**（多路倒数秩融合）
+6. **Ranking candidates**（语义向量与大模型逐批打分）
+7. **Preparing final papers**（生成最终成果卡片）
 
-- Run ID。
-- Provider、API Type、Model、数据源。
-- 后端请求是否被接受。
-- LLM 请求开始和返回状态。
-- 数据源请求开始和返回状态。
-- 查询内容、命中数量、迭代轮次。
-- Discipline Fields 的源端应用方式。
-- 错误信息和排错提示。
+右下角的 **System Dashboard** 持续输出带有毫秒级时间戳的结构化事件日志，支持随时一键导出调试。
 
-可点击 `Export Log` 导出日志文本。日志导出用于排查，不是论文结果导出。
+---
 
-### Results 页面
+### Results 页面与科研卡片
 
-Results 页面用于阅读和筛选最终论文列表。常见字段包括：
+检索完成后，结果页面按照现代科研工具标准（高信息密度、清晰扫描层级）呈现最终论文列表。
 
-- Rank
-- Score
-- Title
-- Authors
-- Year
-- Source / Venue
-- Provider
-- Citation count
-- DOI
-- Abstract
-- Keywords
-- Relevance reason
-- Record URL
-- PDF URL，若数据源提供
+#### 搜索完成紧凑摘要（Compact Summary Banner）
+
+位于结果列表顶部，提供全局质量速览：
+- **Found X unique papers from Y sources**
+- **Z duplicates merged**
+- **N papers entered LLM ranking**
+- **M final papers shown**
+- **Source warnings**（如有部分源限流或超时的简要提示）
+
+#### 科研论文卡片（Paper Cards）
+
+每篇论文采用卡片式精细排版，方便快速阅读与筛选：
+
+- **标题与快速访问**：大号可读字体，点击标题可直接在新标签页打开论文原文或落地页。
+- **元数据条目**：一目了然呈现 `Authors` · `Year` · `Venue / Journal`。
+- **多源来源追溯（Multi-source Provenance Strip）**：
+  若一篇论文被多个数据库共同检索并合并，卡片醒目标记：
+  `Found in: PubMed · OpenAlex · Crossref`
+  完整保留其跨库来源轨迹。
+- **相关性评估框（Why Relevant & Score）**：
+  突出显示 LLM 给出的匹配度分值（0-10 分）以及针对该论文的具体入选理由（Relevance reason），帮助研究者在数秒内判断其与自身课题的契合度。
+- **折叠式摘要（Collapsible Abstract）**：
+  摘要默认保持收起状态，点击 `Show abstract` 即可展开完整中英文摘要，避免单篇长摘要挤占视线。
+- **快捷动作按钮栏（Action Buttons）**：
+  提供整洁的实体链接操作按钮：
+  - `DOI`（链接至权威解析页）
+  - `PDF`（若源端提供开源全本链接，高亮突出）
+  - `Landing Page`（论文发布官方主页）
+  - `Record`（原始数据库收录页面）
 
 支持：
 
-- 搜索结果。
+- 搜索结果过滤。
 - 按分数、引用、年份或排名排序。
 - 按 DOI、摘要、PDF 等可用性过滤。
 - 勾选论文。
-- 导出 CSV。
+- 导出 CSV（若勾选论文，CSV 只导出勾选项；若未勾选，导出当前过滤后的全部结果）。
 
-如果勾选了论文，CSV 只导出勾选项；如果没有勾选，则导出当前过滤后的结果。
+
 
 ### Citation Map 页面
 
