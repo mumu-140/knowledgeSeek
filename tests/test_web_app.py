@@ -1,3 +1,4 @@
+from paperseek.providers import PaperAuthor, PaperCitation, PaperIdentifiers, PaperLinks, PaperNames, PaperRecord, PaperSource
 import unittest
 from unittest.mock import patch
 
@@ -189,6 +190,234 @@ class WebAppTest(unittest.TestCase):
             self.assertTrue(payload["has_openalex_api_key"])
             self.assertNotIn("sk-env-test", response.text)
             self.assertNotIn("oa-env-test", response.text)
+
+
+    def test_sources_endpoint_includes_federated_source(self):
+        response = self.client.get("/api/sources")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        sources_map = {item["id"]: item for item in payload["sources"]}
+        self.assertIn("federated", sources_map)
+        fed = sources_map["federated"]
+        self.assertIn("federated_profile", fed.get("supported_parameters", []))
+        self.assertIn("federated_max_per_source", fed.get("supported_parameters", []))
+
+    def test_config_defaults_includes_federated_settings(self):
+        response = self.client.get("/api/config/defaults")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("federated_profile", payload)
+        self.assertIn("federated_max_per_source", payload)
+        self.assertIn(payload["federated_profile"], ("biomed", "cs", "general"))
+        self.assertGreaterEqual(payload["federated_max_per_source"], 1)
+
+    def test_config_from_payload_with_federated_profiles(self):
+        for profile in ("biomed", "cs", "general"):
+            payload = SearchRequest(
+                question="immune checkpoint inhibitors",
+                data_source="federated",
+                federated_profile=profile,
+                federated_max_per_source=30,
+            )
+            config = _config_from_payload(payload)
+            self.assertEqual(config.data_source, "federated")
+            self.assertEqual(config.federated_profile, profile)
+            self.assertEqual(config.federated_max_per_source, 30)
+
+    def test_search_federated_successful_multi_source_and_provenance(self):
+        record = PaperRecord(
+            uid="mosaic:sample-1",
+            title="CRISPR gene editing in mammalian cells",
+            types=["article"],
+            source=PaperSource(source_title="Nature", publish_year=2024),
+            names=PaperNames(authors=[PaperAuthor(display_name="Jennifer Doudna")]),
+            links=PaperLinks(record="https://nature.com/example", pdf="https://nature.com/example.pdf"),
+            citations=[PaperCitation(db="MultiSource", count=120)],
+            identifiers=PaperIdentifiers(doi="10.1038/sample1"),
+            abstract="Study on gene editing techniques.",
+            provider="federated",
+            raw={
+                "mosaic_sources": ["PubMed", "OpenAlex", "Crossref"],
+                "mosaic_source": "PubMed",
+            },
+        )
+        fake_stats = {
+            "raw_total": 75,
+            "unique": 60,
+            "merged": 15,
+            "per_source": {"PubMed": 25, "Europe PMC": 25, "Crossref": 25},
+            "errors": {},
+        }
+        fake_steps = [
+            {"step": "retrieval", "count": 60},
+            {"step": "rrf", "count": 60},
+            {"step": "embedding", "count": 60},
+            {"step": "reranker", "count": 30, "skipped": True},
+            {"step": "llm", "count": 10},
+        ]
+
+        class FakeFederatedAgent:
+            def __init__(self, config, llm):
+                self.config = config
+                self.llm = llm
+
+            def search(self, question, verbose=False, event_handler=None):
+                return {
+                    "question": question,
+                    "source": "federated",
+                    "final_query": "CRISPR gene editing",
+                    "db": "FEDERATED",
+                    "field": "",
+                    "total": 60,
+                    "iterations": 1,
+                    "history": [],
+                    "citation_map": {},
+                    "federated_stats": fake_stats,
+                    "ranking_steps": fake_steps,
+                    "ranked": [
+                        {
+                            "document": record,
+                            "score": 9.5,
+                            "reasoning": "Direct match for CRISPR mechanisms.",
+                            "retrieval_lanes": ["dense", "bm25"],
+                        }
+                    ],
+                }
+
+        with patch("paperseek.web_app.create_llm_client", return_value=object()), patch(
+            "paperseek.web_app.PaperSeekAgent", FakeFederatedAgent
+        ):
+            response = self.client.post(
+                "/api/search",
+                json={
+                    "question": "CRISPR gene editing",
+                    "data_source": "federated",
+                    "federated_profile": "biomed",
+                    "federated_max_per_source": 25,
+                    "llm_provider": "ollama",
+                    "llm_api_type": "openai_chat",
+                    "target_min": 5,
+                    "target_max": 20,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["source"], "federated")
+        self.assertEqual(data["federated_stats"]["raw_total"], 75)
+        self.assertEqual(data["federated_stats"]["unique"], 60)
+        self.assertEqual(data["federated_stats"]["merged"], 15)
+        self.assertEqual(data["federated_stats"]["per_source"]["PubMed"], 25)
+        self.assertEqual(len(data["ranked"]), 1)
+        paper = data["ranked"][0]
+        self.assertEqual(paper["mosaic_sources"], ["PubMed", "OpenAlex", "Crossref"])
+        self.assertEqual(paper["mosaic_source"], "PubMed")
+        self.assertEqual(paper["relevance_reason"], "Direct match for CRISPR mechanisms.")
+        self.assertEqual(data["ranking_steps"], fake_steps)
+
+    def test_search_federated_partial_source_failure_and_429(self):
+        fake_stats = {
+            "raw_total": 45,
+            "unique": 40,
+            "merged": 5,
+            "per_source": {"PubMed": 25, "Europe PMC": 20, "Semantic Scholar": 0, "bioRxiv": 0},
+            "errors": {
+                "Semantic Scholar": "Rate limited (429)",
+                "bioRxiv": "No papers found",
+            },
+        }
+
+        class FakePartialAgent:
+            def __init__(self, config, llm):
+                self.config = config
+                self.llm = llm
+
+            def search(self, question, verbose=False, event_handler=None):
+                return {
+                    "question": question,
+                    "source": "federated",
+                    "final_query": "cancer immunotherapy",
+                    "db": "FEDERATED",
+                    "field": "",
+                    "total": 40,
+                    "iterations": 1,
+                    "history": [],
+                    "citation_map": {},
+                    "federated_stats": fake_stats,
+                    "ranked": [],
+                }
+
+        with patch("paperseek.web_app.create_llm_client", return_value=object()), patch(
+            "paperseek.web_app.PaperSeekAgent", FakePartialAgent
+        ):
+            response = self.client.post(
+                "/api/search",
+                json={
+                    "question": "cancer immunotherapy",
+                    "data_source": "federated",
+                    "federated_profile": "biomed",
+                    "llm_provider": "ollama",
+                    "llm_api_type": "openai_chat",
+                    "target_min": 0,
+                    "target_max": 20,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["federated_stats"]["errors"]["Semantic Scholar"], "Rate limited (429)")
+        self.assertEqual(data["federated_stats"]["errors"]["bioRxiv"], "No papers found")
+        self.assertEqual(data["federated_stats"]["per_source"]["Semantic Scholar"], 0)
+
+    def test_search_federated_zero_result_source(self):
+        fake_stats = {
+            "raw_total": 10,
+            "unique": 10,
+            "merged": 0,
+            "per_source": {"arXiv": 10, "DBLP": 0},
+            "errors": {},
+        }
+
+        class FakeZeroSourceAgent:
+            def __init__(self, config, llm):
+                self.config = config
+                self.llm = llm
+
+            def search(self, question, verbose=False, event_handler=None):
+                return {
+                    "question": question,
+                    "source": "federated",
+                    "final_query": "quantum gravity",
+                    "db": "FEDERATED",
+                    "field": "",
+                    "total": 10,
+                    "iterations": 1,
+                    "history": [],
+                    "citation_map": {},
+                    "federated_stats": fake_stats,
+                    "ranked": [],
+                }
+
+        with patch("paperseek.web_app.create_llm_client", return_value=object()), patch(
+            "paperseek.web_app.PaperSeekAgent", FakeZeroSourceAgent
+        ):
+            response = self.client.post(
+                "/api/search",
+                json={
+                    "question": "quantum gravity",
+                    "data_source": "federated",
+                    "federated_profile": "cs",
+                    "llm_provider": "ollama",
+                    "llm_api_type": "openai_chat",
+                    "target_min": 0,
+                    "target_max": 10,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["federated_stats"]["per_source"]["DBLP"], 0)
+        self.assertEqual(data["federated_stats"]["unique"], 10)
 
 
 if __name__ == "__main__":

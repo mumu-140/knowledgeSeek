@@ -70,5 +70,30 @@ class ResultsTest(unittest.TestCase):
         self.assertEqual(row["publish_year"], 2002)
 
 
+    def test_ranked_items_preserves_mosaic_provenance(self):
+        record = PaperRecord(
+            uid="mosaic:sample-2",
+            title="Federated Search in Digital Libraries",
+            types=["article"],
+            source=PaperSource(source_title="JASIST", publish_year=2024),
+            names=PaperNames(authors=[PaperAuthor(display_name="Ada Lovelace")]),
+            links=PaperLinks(record="https://example.org/sample2"),
+            citations=[],
+            identifiers=PaperIdentifiers(doi="10.1000/182"),
+            abstract="Federated retrieval across academic databases.",
+            provider="federated",
+            raw={
+                "mosaic_sources": ["Crossref", "OpenAlex", "PubMed"],
+                "mosaic_source": "Crossref",
+            },
+        )
+        rows = ranked_items_to_dict([{"document": record, "score": 9.2, "reasoning": "Highly relevant."}])
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["mosaic_sources"], ["Crossref", "OpenAlex", "PubMed"])
+        self.assertEqual(row["mosaic_source"], "Crossref")
+        self.assertEqual(row["relevance_reason"], "Highly relevant.")
+
+
 if __name__ == "__main__":
     unittest.main()
