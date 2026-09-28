@@ -39,6 +39,14 @@ const configAlertCloseButton = document.getElementById("configAlertCloseButton")
 const configAlertAdvancedButton = document.getElementById("configAlertAdvancedButton");
 const languageButtons = [...document.querySelectorAll("[data-language]")];
 const languageStorageKey = "paperseek.ui.language";
+const modePillFederated = document.getElementById("modePillFederated");
+const modePillSingle = document.getElementById("modePillSingle");
+const federatedPanel = document.getElementById("federatedPanel");
+const singleSourcePanel = document.getElementById("singleSourcePanel");
+const federatedProfileInput = document.getElementById("federatedProfile");
+const federatedProfileSelect = document.getElementById("federatedProfileSelect");
+const federatedMaxPerSourceInput = document.getElementById("federatedMaxPerSource");
+const targetScaleSelect = document.getElementById("targetScale");
 
 const translations = {
   zh: {
@@ -107,6 +115,22 @@ const translations = {
     "Provider default, editable for compatible endpoints": "服务商默认地址，可为兼容端点修改",
     "Source settings": "数据源设置",
     "Data Source": "数据源",
+    "Federated Search": "联合检索",
+    "Federated Search (Multi-source)": "联合检索（MOSAIC 多源）",
+    "Single Source": "单一源检索",
+    "Scholarly Database": "学术数据库",
+    "Multi-source retrieval powered by MOSAIC": "MOSAIC 多源学术检索与去重引擎",
+    "Concurrent retrieval across scholarly indexes with rank-preserving candidate merge.": "并发检索多大学术索引，并在保持排序前提下进行跨源元数据合并去重。",
+    "Biomedical": "生物医学（Biomedical）",
+    "Computer Science": "计算机科学（Computer Science）",
+    "General": "通用学科（General）",
+    "Results scale": "返回篇数",
+    "Max per source": "每源抓取上限",
+    "Profile": "领域预设（Profile）",
+    "Candidate Pool Max": "最大候选池",
+    "RRF k Parameter": "RRF 融合参数 k",
+    "Settings for active retrieval source": "当前检索数据源专属设置",
+    "What literature are you looking for?": "需要检索哪些学术文献？请输入研究课题、意图或核心概念...",
     "OpenAlex API Key": "OpenAlex API Key",
     "Optional if anonymous access is available": "匿名访问可用时可选",
     "OpenAlex Email": "OpenAlex 邮箱",
@@ -396,6 +420,7 @@ const retrievalProviderDefaults = {
 
 const stageOrder = ["query", "search", "ranking", "results"];
 const sourceLabels = {
+  federated: "Federated Search (Multi-source)",
   openalex: "OpenAlex (precise search)",
   arxiv: "arXiv (preprints)",
   semanticscholar: "Semantic Scholar (broad scholarly graph)",
@@ -406,6 +431,8 @@ const sourceLabels = {
   wos: "Web of Science Starter (temporarily unavailable)",
 };
 const compactSourceLabels = {
+  federated: "Federated Search",
+  mosaic: "MOSAIC Federated",
   openalex: "OpenAlex",
   arxiv: "arXiv",
   semanticscholar: "Semantic Scholar",
@@ -416,6 +443,7 @@ const compactSourceLabels = {
   wos: "Web of Science Starter",
 };
 const sourceMetaLabels = {
+  federated: "Multi-source retrieval powered by MOSAIC.",
   openalex: "Optional OpenAlex API key and email are in Advanced settings.",
   arxiv: "arXiv does not require an API key.",
   semanticscholar: "Semantic Scholar API key is optional in Advanced settings.",
@@ -766,6 +794,36 @@ function getNumber(id) {
   return Number(document.getElementById(id).value);
 }
 
+function setFederatedProfile(profile) {
+  if (federatedProfileInput) federatedProfileInput.value = profile;
+  if (federatedProfileSelect) federatedProfileSelect.value = profile;
+  document.querySelectorAll(".profile-chip").forEach((chip) => {
+    chip.classList.toggle("active", chip.dataset.profile === profile);
+  });
+}
+
+function setWorkspaceMode(mode) {
+  const isFederated = mode === "federated";
+  if (modePillFederated) modePillFederated.classList.toggle("active", isFederated);
+  if (modePillSingle) modePillSingle.classList.toggle("active", !isFederated);
+  if (federatedPanel) federatedPanel.classList.toggle("is-hidden", !isFederated);
+  if (singleSourcePanel) singleSourcePanel.classList.toggle("is-hidden", isFederated);
+
+  if (isFederated) {
+    if (dataSourceSelect.value !== "federated") {
+      dataSourceSelect.value = "federated";
+      updateSourceFields();
+      updateSourceFilterUi({ reset: true });
+    }
+  } else {
+    if (dataSourceSelect.value === "federated") {
+      dataSourceSelect.value = "openalex";
+      updateSourceFields();
+      updateSourceFilterUi({ reset: true });
+    }
+  }
+}
+
 function updateSourceSummary() {
   const source = dataSourceSelect.value || "openalex";
   if (basicSourceName) {
@@ -979,6 +1037,13 @@ async function loadServerDefaults() {
     environmentConfig = { ...environmentConfig, ...data };
     if (data.data_source) {
       dataSourceSelect.value = data.data_source;
+      setWorkspaceMode(data.data_source === "federated" ? "federated" : "single");
+    }
+    if (data.federated_profile) {
+      setFederatedProfile(data.federated_profile);
+    }
+    if (data.federated_max_per_source && federatedMaxPerSourceInput) {
+      federatedMaxPerSourceInput.value = Number(data.federated_max_per_source);
     }
     if (data.llm_provider && providerDefaults[data.llm_provider]) {
       providerSelect.value = data.llm_provider;
@@ -2439,6 +2504,8 @@ function buildPayload() {
   return {
     question: getValue("question"),
     data_source: getValue("dataSource"),
+    federated_profile: (federatedProfileInput ? federatedProfileInput.value : "") || (federatedProfileSelect ? federatedProfileSelect.value : "") || "general",
+    federated_max_per_source: (federatedMaxPerSourceInput ? Number(federatedMaxPerSourceInput.value) : 25) || 25,
     wos_api_key: getValue("wosApiKey"),
     openalex_api_key: getValue("openAlexApiKey"),
     openalex_email: getValue("openAlexEmail"),
@@ -2819,6 +2886,28 @@ if (disciplineOptionsContainer) {
 if (clearDisciplinesButton) {
   clearDisciplinesButton.addEventListener("click", () => {
     setSelectedDisciplineFields([]);
+  });
+}
+
+if (modePillFederated) {
+  modePillFederated.addEventListener("click", () => setWorkspaceMode("federated"));
+}
+if (modePillSingle) {
+  modePillSingle.addEventListener("click", () => setWorkspaceMode("single"));
+}
+document.querySelectorAll(".profile-chip").forEach((chip) => {
+  chip.addEventListener("click", () => setFederatedProfile(chip.dataset.profile));
+});
+if (federatedProfileSelect) {
+  federatedProfileSelect.addEventListener("change", (e) => setFederatedProfile(e.target.value));
+}
+if (targetScaleSelect) {
+  targetScaleSelect.addEventListener("change", (e) => {
+    const count = Number(e.target.value);
+    const targetMaxInput = document.getElementById("targetMax");
+    const targetMinInput = document.getElementById("targetMin");
+    if (targetMaxInput) targetMaxInput.value = count;
+    if (targetMinInput) targetMinInput.value = Math.min(5, count);
   });
 }
 

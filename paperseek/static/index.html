@@ -40,43 +40,94 @@
     <main class="shell">
       <section class="left-pane" aria-label="Search controls">
         <form id="searchForm" autocomplete="off" novalidate>
-          <section class="query-section">
-            <div class="section-kicker">Research Question</div>
-            <textarea id="question" name="question" rows="3" spellcheck="true" required placeholder="Paste a research question, gap paragraph, or plain language search intent."></textarea>
-            <label class="field query-source-field">
-              <span>Data Source</span>
-              <select id="dataSource">
-                <option value="openalex" selected>OpenAlex (precise search)</option>
-                <option value="arxiv">arXiv (preprints)</option>
-                <option value="semanticscholar">Semantic Scholar (broad scholarly graph)</option>
-                <option value="pubmed">PubMed (biomedical literature)</option>
-                <option value="googlescholar">Google Scholar (via Serper)</option>
-                <option value="paperhub">Computer science top conferences</option>
-                <option value="crossref">Crossref (metadata / DOI registry)</option>
-                <option value="wos">Web of Science Starter (temporarily unavailable)</option>
-              </select>
-            </label>
-            <details id="disciplinePicker" class="discipline-picker">
-              <summary>
-                <span id="disciplinePickerLabel">Source Filter</span>
-                <small id="disciplineSummary">Any field</small>
-              </summary>
-              <div class="discipline-menu">
-                <div id="disciplineOptions" class="discipline-options" aria-label="Discipline Fields"></div>
-                <button id="clearDisciplinesButton" class="utility-button" type="button">Clear</button>
+          <section class="search-workspace">
+            <div class="workspace-header">
+              <div class="section-kicker">Research Question</div>
+              <div class="workspace-scale">
+                <label for="targetScale" class="scale-label">
+                  <span>Results scale</span>
+                  <select id="targetScale">
+                    <option value="10">10 papers</option>
+                    <option value="20" selected>20 papers</option>
+                    <option value="50">50 papers</option>
+                  </select>
+                </label>
               </div>
-            </details>
-            <label id="fieldHintField" class="field source-filter-text is-hidden">
-              <span id="fieldHintLabel">Field/context hint</span>
-              <input id="searchField" type="text" placeholder="Optional field, discipline, or domain context" autocomplete="off">
-            </label>
-            <label id="expandCitationsField" class="toggle-field citation-toggle source-field source-openalex">
-              <input id="expandCitations" type="checkbox" checked>
-              <span>
-                <strong>Expand citations</strong>
-                <small>Adds forward and backward citation traversal; searches may take longer.</small>
-              </span>
-            </label>
+            </div>
+
+            <div class="query-box-wrapper">
+              <textarea id="question" name="question" rows="3" spellcheck="true" required placeholder="What literature are you looking for?"></textarea>
+            </div>
+
+            <!-- Mode & Source Selection -->
+            <div class="search-mode-selector">
+              <div class="mode-switch-bar">
+                <button type="button" class="mode-pill active" id="modePillFederated" data-mode="federated">
+                  <span class="mode-pill-dot"></span>
+                  <span class="mode-pill-title">Federated Search</span>
+                  <span class="mode-pill-tag">MOSAIC</span>
+                </button>
+                <button type="button" class="mode-pill" id="modePillSingle" data-mode="single">
+                  <span class="mode-pill-title">Single Source</span>
+                </button>
+              </div>
+
+              <!-- Federated Search Card -->
+              <div id="federatedPanel" class="federated-hero-panel">
+                <div class="federated-hero-meta">
+                  <div class="federated-hero-title">
+                    <strong>Federated Search</strong>
+                    <span class="engine-badge">Multi-source retrieval powered by MOSAIC</span>
+                  </div>
+                  <p class="federated-hero-subtitle">Concurrent retrieval across scholarly indexes with rank-preserving candidate merge.</p>
+                </div>
+
+                <div class="profile-chips-group" role="radiogroup" aria-label="Federated Profile">
+                  <button type="button" class="profile-chip" data-profile="biomed">
+                    <div class="chip-top">
+                      <span class="chip-radio"></span>
+                      <strong class="chip-name">Biomedical</strong>
+                    </div>
+                    <span class="chip-sources">PubMed · Europe PMC · PMC · OpenAlex · Semantic Scholar · bioRxiv · Crossref</span>
+                  </button>
+                  <button type="button" class="profile-chip" data-profile="cs">
+                    <div class="chip-top">
+                      <span class="chip-radio"></span>
+                      <strong class="chip-name">Computer Science</strong>
+                    </div>
+                    <span class="chip-sources">OpenAlex · Semantic Scholar · arXiv · DBLP · Crossref</span>
+                  </button>
+                  <button type="button" class="profile-chip active" data-profile="general">
+                    <div class="chip-top">
+                      <span class="chip-radio"></span>
+                      <strong class="chip-name">General</strong>
+                    </div>
+                    <span class="chip-sources">OpenAlex · Semantic Scholar · Crossref · DOAJ</span>
+                  </button>
+                </div>
+                <input type="hidden" id="federatedProfile" name="federated_profile" value="general">
+              </div>
+
+              <!-- Single Source Selector -->
+              <div id="singleSourcePanel" class="single-source-panel is-hidden">
+                <label class="field">
+                  <span>Scholarly Database</span>
+                  <select id="dataSource">
+                    <option value="federated" selected>Federated Search (Multi-source)</option>
+                    <option value="openalex">OpenAlex (precise search)</option>
+                    <option value="arxiv">arXiv (preprints)</option>
+                    <option value="semanticscholar">Semantic Scholar (broad scholarly graph)</option>
+                    <option value="pubmed">PubMed (biomedical literature)</option>
+                    <option value="googlescholar">Google Scholar (via Serper)</option>
+                    <option value="paperhub">Computer science top conferences</option>
+                    <option value="crossref">Crossref (metadata / DOI registry)</option>
+                    <option value="wos">Web of Science Starter (temporarily unavailable)</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <!-- Primary Actions -->
             <div class="query-actions">
               <button id="searchButton" class="primary-button" type="submit">
                 <span>Run Search</span>
@@ -87,193 +138,267 @@
             </div>
           </section>
 
-          <section class="config-section">
-            <div class="section-header">
-              <div>
-                <div class="section-kicker">Configuration</div>
-                <h2>Model API and source</h2>
+          <!-- Advanced Settings Collapsible -->
+          <details id="advancedSettings" class="config-advanced">
+            <summary>
+              <span class="advanced-summary-title">Advanced settings</span>
+              <small class="advanced-summary-desc">Retrieval · Ranking · Citations · LLM · Source keys</small>
+            </summary>
+
+            <div class="config-advanced-body">
+              <!-- Group 1: Retrieval -->
+              <div class="config-group">
+                <div class="config-group-header">
+                  <div class="config-group-title">Retrieval</div>
+                  <small>Target candidate scale and lane limits</small>
+                </div>
+                <div class="field-grid">
+                  <label class="field">
+                    <span>Min Results</span>
+                    <input id="targetMin" type="number" value="5" min="0" max="50">
+                  </label>
+                  <label class="field">
+                    <span>Max Results</span>
+                    <input id="targetMax" type="number" value="20" min="1" max="50">
+                  </label>
+                  <label class="field">
+                    <span>Max Iterations</span>
+                    <input id="maxIterations" type="number" value="5" min="1" max="10">
+                  </label>
+                  <label class="field">
+                    <span>RRF k Parameter</span>
+                    <input id="retrievalRrfK" type="number" value="60" min="1" max="1000">
+                  </label>
+                  <label class="field span-2">
+                    <span>Candidate Pool Max</span>
+                    <input id="retrievalPoolMax" type="number" value="3000" min="1" max="3000">
+                  </label>
+                  <details id="disciplinePicker" class="discipline-picker span-2">
+                    <summary>
+                      <span id="disciplinePickerLabel">Source Filter</span>
+                      <small id="disciplineSummary">Any field</small>
+                    </summary>
+                    <div class="discipline-menu">
+                      <div id="disciplineOptions" class="discipline-options" aria-label="Discipline Fields"></div>
+                      <button id="clearDisciplinesButton" class="utility-button" type="button">Clear</button>
+                    </div>
+                  </details>
+                  <label id="fieldHintField" class="field span-2 source-filter-text is-hidden">
+                    <span id="fieldHintLabel">Field/context hint</span>
+                    <input id="searchField" type="text" placeholder="Optional field, discipline, or domain context" autocomplete="off">
+                  </label>
+                </div>
               </div>
-              <span class="privacy-pill">Session only</span>
+
+              <!-- Group 2: Ranking -->
+              <div class="config-group">
+                <div class="config-group-header">
+                  <div class="config-group-title">Ranking</div>
+                  <small>Embedding similarity and cross-encoder rerankers</small>
+                </div>
+                <div class="field-grid">
+                  <label class="field">
+                    <span>Embedding Provider</span>
+                    <select id="retrievalEmbeddingProvider">
+                      <option value="local" selected>Local Python</option>
+                      <option value="cstcloud">CSTCloud</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="dashscope">Alibaba Cloud Bailian</option>
+                      <option value="siliconflow">SiliconFlow</option>
+                      <option value="openrouter">OpenRouter</option>
+                      <option value="nvidia">NVIDIA NIM</option>
+                      <option value="zhipu">Zhipu AI</option>
+                      <option value="volcengine">Volcano Ark</option>
+                      <option value="modelscope">ModelScope API-Inference</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Embedding Model</span>
+                    <input id="retrievalEmbeddingModel" type="text" placeholder="Local Python when empty" autocomplete="off">
+                  </label>
+                  <label class="field">
+                    <span>Embedding Base URL</span>
+                    <input id="retrievalEmbeddingBaseUrl" type="url" placeholder="Provider default" autocomplete="off">
+                  </label>
+                  <label class="field">
+                    <span>Embedding API Key</span>
+                    <input id="retrievalEmbeddingApiKey" type="password" placeholder="Optional; defaults to Model API key" autocomplete="off">
+                  </label>
+                  <label class="field">
+                    <span>Reranker Provider</span>
+                    <select id="retrievalRerankerProvider">
+                      <option value="" selected>Off</option>
+                      <option value="cstcloud">CSTCloud</option>
+                      <option value="openrouter">OpenRouter</option>
+                      <option value="nvidia">NVIDIA NIM</option>
+                      <option value="siliconflow">SiliconFlow</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Reranker Model</span>
+                    <input id="retrievalRerankerModel" type="text" placeholder="Optional" autocomplete="off">
+                  </label>
+                  <label class="field">
+                    <span>Reranker Base URL</span>
+                    <input id="retrievalRerankerBaseUrl" type="url" placeholder="Provider default" autocomplete="off">
+                  </label>
+                  <label class="field">
+                    <span>Reranker API Key</span>
+                    <input id="retrievalRerankerApiKey" type="password" placeholder="Optional; defaults to Model API key" autocomplete="off">
+                  </label>
+                </div>
+              </div>
+
+              <!-- Group 3: Citation expansion -->
+              <div class="config-group">
+                <div class="config-group-header">
+                  <div class="config-group-title">Citation expansion</div>
+                  <small>Forward and backward citation traversal</small>
+                </div>
+                <div class="field-grid">
+                  <label id="expandCitationsField" class="toggle-field citation-toggle span-2">
+                    <input id="expandCitations" type="checkbox" checked>
+                    <span>
+                      <strong>Expand citations</strong>
+                      <small>Adds forward and backward citation traversal; searches may take longer.</small>
+                    </span>
+                  </label>
+                  <div hidden>
+                    <input id="fetchAbstracts" type="checkbox">
+                  </div>
+                </div>
+              </div>
+
+              <!-- Group 4: LLM -->
+              <div class="config-group">
+                <div class="config-group-header">
+                  <div class="config-group-title">LLM</div>
+                  <small>Model credentials and endpoint settings</small>
+                </div>
+                <div class="field-grid">
+                  <label class="field span-2">
+                    <span>Provider</span>
+                    <select id="llmProvider">
+                      <option value="cstcloud">中国科技云（CSTCloud）</option>
+                      <option value="deepseek">DeepSeek</option>
+                      <option value="modelscope">ModelScope API-Inference（魔搭）</option>
+                      <option value="siliconflow">硅基流动（SiliconFlow）</option>
+                      <option value="dashscope">阿里云百炼（DashScope）</option>
+                      <option value="openrouter">OpenRouter</option>
+                      <option value="nvidia">NVIDIA NIM</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="anthropic">Anthropic</option>
+                      <option value="google">Google Gemini</option>
+                      <option value="zhipu">智谱 AI（GLM）</option>
+                      <option value="moonshot">Kimi（Moonshot）</option>
+                      <option value="volcengine">火山方舟</option>
+                      <option value="hunyuan">腾讯混元</option>
+                      <option value="qianfan">百度千帆</option>
+                      <option value="ollama">Ollama（本地）</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                  </label>
+                  <label class="field span-2">
+                    <span>API Key</span>
+                    <input id="llmApiKey" type="password" autocomplete="off">
+                  </label>
+                  <label class="field">
+                    <span>Model</span>
+                    <input id="llmModel" type="text" value="gpt-5.4-mini" autocomplete="off">
+                  </label>
+                  <label class="field">
+                    <span>API Type</span>
+                    <select id="llmApiType">
+                      <option value="openai_responses">OpenAI Responses API</option>
+                      <option value="openai_chat">OpenAI Chat Completions API</option>
+                      <option value="anthropic_messages">Anthropic Messages API</option>
+                    </select>
+                  </label>
+                  <label class="field span-2">
+                    <span>Base URL</span>
+                    <input id="llmBaseUrl" type="url" placeholder="Provider default, editable for compatible endpoints" autocomplete="off">
+                  </label>
+                </div>
+              </div>
+
+              <!-- Group 5: Source-specific -->
+              <div class="config-group">
+                <div class="config-group-header">
+                  <div class="config-group-title">Source-specific</div>
+                  <small id="sourceSpecificHint">Settings for active retrieval source</small>
+                </div>
+                <div class="field-grid">
+                  <!-- Federated settings -->
+                  <label id="federatedMaxPerSourceField" class="field source-field source-federated">
+                    <span>Max per source</span>
+                    <input id="federatedMaxPerSource" type="number" value="25" min="1" max="100">
+                  </label>
+                  <label id="federatedProfileSelectField" class="field source-field source-federated">
+                    <span>Profile</span>
+                    <select id="federatedProfileSelect">
+                      <option value="biomed">Biomedical</option>
+                      <option value="cs">Computer Science</option>
+                      <option value="general" selected>General</option>
+                    </select>
+                  </label>
+
+                  <!-- OpenAlex -->
+                  <label id="openAlexKeyField" class="field span-2 source-field source-openalex">
+                    <span>OpenAlex API Key</span>
+                    <input id="openAlexApiKey" type="password" placeholder="Optional if anonymous access is available" autocomplete="off">
+                  </label>
+                  <label id="openAlexEmailField" class="field span-2 source-field source-openalex source-federated">
+                    <span>OpenAlex Email</span>
+                    <input id="openAlexEmail" type="email" placeholder="Optional polite-pool email" autocomplete="off">
+                  </label>
+
+                  <!-- Crossref -->
+                  <label id="crossrefEmailField" class="field span-2 source-field source-crossref source-federated">
+                    <span>Crossref Email</span>
+                    <input id="crossrefEmail" type="email" placeholder="Optional polite-pool email" autocomplete="off">
+                  </label>
+
+                  <!-- Semantic Scholar -->
+                  <label id="semanticScholarKeyField" class="field span-2 source-field source-semanticscholar source-federated">
+                    <span>Semantic Scholar API Key</span>
+                    <input id="semanticScholarApiKey" type="password" placeholder="Optional for higher rate limits" autocomplete="off">
+                  </label>
+
+                  <!-- PubMed -->
+                  <label id="pubmedKeyField" class="field span-2 source-field source-pubmed source-federated">
+                    <span>PubMed API Key</span>
+                    <input id="pubmedApiKey" type="password" placeholder="Optional NCBI API key" autocomplete="off">
+                  </label>
+                  <label id="pubmedEmailField" class="field span-2 source-field source-pubmed source-federated">
+                    <span>PubMed Email</span>
+                    <input id="pubmedEmail" type="email" placeholder="Optional NCBI contact email" autocomplete="off">
+                  </label>
+                  <label id="pubmedToolField" class="field source-field source-pubmed">
+                    <span>PubMed Tool</span>
+                    <input id="pubmedTool" type="text" value="paperseek" autocomplete="off">
+                  </label>
+
+                  <!-- Google Scholar -->
+                  <label id="serperKeyField" class="field span-2 source-field source-googlescholar">
+                    <span>Serper API Key</span>
+                    <input id="serperApiKey" type="password" placeholder="Required for Google Scholar" autocomplete="off">
+                  </label>
+
+                  <!-- WoS -->
+                  <label id="wosKeyField" class="field span-2 source-field source-wos">
+                    <span>WoS API Key</span>
+                    <input id="wosApiKey" type="password" autocomplete="off">
+                  </label>
+                  <label id="wosDbField" class="field source-field source-wos">
+                    <span>WoS DB</span>
+                    <input id="wosDb" type="text" value="WOS" autocomplete="off">
+                  </label>
+                </div>
+              </div>
             </div>
-
-            <div class="config-group">
-              <div class="config-group-title">Model API</div>
-              <div class="field-grid">
-                <label class="field span-2">
-                  <span>Provider</span>
-                  <select id="llmProvider">
-                    <option value="cstcloud">中国科技云（CSTCloud）</option>
-                    <option value="deepseek">DeepSeek</option>
-                    <option value="modelscope">ModelScope API-Inference（魔搭）</option>
-                    <option value="siliconflow">硅基流动（SiliconFlow）</option>
-                    <option value="dashscope">阿里云百炼（DashScope）</option>
-                    <option value="openrouter">OpenRouter</option>
-                    <option value="nvidia">NVIDIA NIM</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="anthropic">Anthropic</option>
-                    <option value="google">Google Gemini</option>
-                    <option value="zhipu">智谱 AI（GLM）</option>
-                    <option value="moonshot">Kimi（Moonshot）</option>
-                    <option value="volcengine">火山方舟</option>
-                    <option value="hunyuan">腾讯混元</option>
-                    <option value="qianfan">百度千帆</option>
-                    <option value="ollama">Ollama（本地）</option>
-                    <option value="custom">Custom</option>
-                  </select>
-                </label>
-                <label class="field span-2">
-                  <span>API Key</span>
-                  <input id="llmApiKey" type="password" autocomplete="off">
-                </label>
-                <label class="field">
-                  <span>Model</span>
-                  <input id="llmModel" type="text" value="gpt-5.4-mini" autocomplete="off">
-                </label>
-                <div class="source-summary">
-                  <span>Source</span>
-                  <strong id="basicSourceName">OpenAlex</strong>
-                  <small id="basicSourceMeta">Optional source keys are in Advanced settings.</small>
-                </div>
-              </div>
-            </div>
-
-            <details id="advancedSettings" class="config-advanced">
-              <summary>
-                <span>Advanced settings</span>
-                <small>Protocol, source keys, and retrieval settings</small>
-              </summary>
-
-              <div class="config-advanced-body">
-                <div class="config-group">
-                  <div class="config-group-title">Model protocol</div>
-                  <div class="field-grid">
-                    <label class="field">
-                      <span>API Type</span>
-                      <select id="llmApiType">
-                        <option value="openai_responses">OpenAI Responses API</option>
-                        <option value="openai_chat">OpenAI Chat Completions API</option>
-                        <option value="anthropic_messages">Anthropic Messages API</option>
-                      </select>
-                    </label>
-                    <label class="field">
-                      <span>Base URL</span>
-                      <input id="llmBaseUrl" type="url" placeholder="Provider default, editable for compatible endpoints" autocomplete="off">
-                    </label>
-                  </div>
-                </div>
-
-                <div class="config-group">
-                  <div class="config-group-title">Embedding and reranking</div>
-                  <div class="field-grid">
-                    <label class="field">
-                      <span>Embedding Provider</span>
-                      <select id="retrievalEmbeddingProvider">
-                        <option value="local" selected>Local Python</option>
-                        <option value="cstcloud">CSTCloud</option>
-                        <option value="openai">OpenAI</option>
-                        <option value="dashscope">Alibaba Cloud Bailian</option>
-                        <option value="siliconflow">SiliconFlow</option>
-                        <option value="openrouter">OpenRouter</option>
-                        <option value="nvidia">NVIDIA NIM</option>
-                        <option value="zhipu">Zhipu AI</option>
-                        <option value="volcengine">Volcano Ark</option>
-                        <option value="modelscope">ModelScope API-Inference</option>
-                        <option value="custom">Custom</option>
-                      </select>
-                    </label>
-                    <label class="field">
-                      <span>Embedding Model</span>
-                      <input id="retrievalEmbeddingModel" type="text" placeholder="Local Python when empty" autocomplete="off">
-                    </label>
-                    <label class="field">
-                      <span>Embedding Base URL</span>
-                      <input id="retrievalEmbeddingBaseUrl" type="url" placeholder="Provider default" autocomplete="off">
-                    </label>
-                    <label class="field">
-                      <span>Embedding API Key</span>
-                      <input id="retrievalEmbeddingApiKey" type="password" placeholder="Optional; defaults to Model API key" autocomplete="off">
-                    </label>
-                    <label class="field">
-                      <span>Reranker Provider</span>
-                      <select id="retrievalRerankerProvider">
-                        <option value="" selected>Off</option>
-                        <option value="cstcloud">CSTCloud</option>
-                        <option value="openrouter">OpenRouter</option>
-                        <option value="nvidia">NVIDIA NIM</option>
-                        <option value="siliconflow">SiliconFlow</option>
-                        <option value="custom">Custom</option>
-                      </select>
-                    </label>
-                    <label class="field">
-                      <span>Reranker Model</span>
-                      <input id="retrievalRerankerModel" type="text" placeholder="Optional" autocomplete="off">
-                    </label>
-                    <label class="field">
-                      <span>Reranker Base URL</span>
-                      <input id="retrievalRerankerBaseUrl" type="url" placeholder="Provider default" autocomplete="off">
-                    </label>
-                    <label class="field">
-                      <span>Reranker API Key</span>
-                      <input id="retrievalRerankerApiKey" type="password" placeholder="Optional; defaults to Model API key" autocomplete="off">
-                    </label>
-                  </div>
-                </div>
-
-                <div class="config-group">
-                  <div class="config-group-title">Source settings</div>
-                  <div class="field-grid">
-                    <label id="openAlexKeyField" class="field span-2 source-field source-openalex">
-                      <span>OpenAlex API Key</span>
-                      <input id="openAlexApiKey" type="password" placeholder="Optional if anonymous access is available" autocomplete="off">
-                    </label>
-                    <label id="openAlexEmailField" class="field span-2 source-field source-openalex">
-                      <span>OpenAlex Email</span>
-                      <input id="openAlexEmail" type="email" placeholder="Optional polite-pool email" autocomplete="off">
-                    </label>
-                    <label id="crossrefEmailField" class="field span-2 source-field source-crossref">
-                      <span>Crossref Email</span>
-                      <input id="crossrefEmail" type="email" placeholder="Optional polite-pool email" autocomplete="off">
-                    </label>
-                    <label id="semanticScholarKeyField" class="field span-2 source-field source-semanticscholar">
-                      <span>Semantic Scholar API Key</span>
-                      <input id="semanticScholarApiKey" type="password" placeholder="Optional for higher rate limits" autocomplete="off">
-                    </label>
-                    <label id="pubmedKeyField" class="field span-2 source-field source-pubmed">
-                      <span>PubMed API Key</span>
-                      <input id="pubmedApiKey" type="password" placeholder="Optional NCBI API key" autocomplete="off">
-                    </label>
-                    <label id="pubmedEmailField" class="field span-2 source-field source-pubmed">
-                      <span>PubMed Email</span>
-                      <input id="pubmedEmail" type="email" placeholder="Optional NCBI contact email" autocomplete="off">
-                    </label>
-                    <label id="pubmedToolField" class="field source-field source-pubmed">
-                      <span>PubMed Tool</span>
-                      <input id="pubmedTool" type="text" value="paperseek" autocomplete="off">
-                    </label>
-                    <label id="serperKeyField" class="field span-2 source-field source-googlescholar">
-                      <span>Serper API Key</span>
-                      <input id="serperApiKey" type="password" placeholder="Required for Google Scholar" autocomplete="off">
-                    </label>
-                    <label id="wosKeyField" class="field span-2 source-field source-wos">
-                      <span>WoS API Key</span>
-                      <input id="wosApiKey" type="password" autocomplete="off">
-                    </label>
-                    <label id="wosDbField" class="field source-field source-wos">
-                      <span>WoS DB</span>
-                      <input id="wosDb" type="text" value="WOS" autocomplete="off">
-                    </label>
-                  </div>
-                </div>
-
-                <div hidden>
-                  <input id="targetMin" type="hidden" value="5">
-                  <input id="targetMax" type="hidden" value="50">
-                  <input id="maxIterations" type="hidden" value="5">
-                  <input id="fetchAbstracts" type="checkbox">
-                </div>
-              </div>
-            </details>
-          </section>
+          </details>
         </form>
       </section>
 

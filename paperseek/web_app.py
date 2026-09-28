@@ -327,6 +327,8 @@ def config_defaults():
     config = AgentConfig.from_env()
     return {
         "data_source": config.data_source,
+        "federated_profile": getattr(config, "federated_profile", "general"),
+        "federated_max_per_source": getattr(config, "federated_max_per_source", 25),
         "llm_provider": config.llm_provider,
         "llm_api_type": config.llm_api_type,
         "llm_model": config.llm_model,
