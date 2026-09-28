@@ -28,7 +28,7 @@ from paperseek.disciplines import (
     source_filter_mode,
 )
 from paperseek.env_loader import load_env_file
-from paperseek.config_store import load_user_config_into_env, set_config_value, CONFIG_KEYS
+from paperseek.config_store import load_user_config_into_env
 from paperseek.history import HistoryStore, result_payload_from_search_result, safe_search_params_from_config
 from paperseek.llm_client import LLMError, create_llm_client, fetch_remote_models
 from paperseek.providers import ProviderError
@@ -539,27 +539,6 @@ def get_llm_models(payload: ModelsRequest):
         }
 
 
-
-class SaveConfigRequest(BaseModel):
-    settings: dict[str, Any] = Field(default_factory=dict)
-
-
-@app.post("/api/config/save")
-def save_config_endpoint(payload: SaveConfigRequest):
-    saved = {}
-    for k, v in payload.settings.items():
-        key_upper = str(k).upper().strip()
-        if key_upper in CONFIG_KEYS and v is not None:
-            val_str = str(v).strip()
-            set_config_value(key_upper, val_str)
-            os.environ[key_upper] = val_str
-            saved[key_upper] = val_str
-    return {
-        "status": "ok",
-        "saved_count": len(saved),
-        "keys": list(saved.keys()),
-        "message": f"Saved {len(saved)} configuration settings to server default.",
-    }
 
 @app.post("/api/search")
 def search(payload: SearchRequest):

@@ -16,7 +16,6 @@ const fetchModelsFeedback = document.getElementById("fetchModelsFeedback");
 const configSavedBadge = document.getElementById("configSavedBadge");
 const configPersistenceText = document.getElementById("configPersistenceText");
 const resetConfigBtn = document.getElementById("resetConfigBtn");
-const saveServerConfigBtn = document.getElementById("saveServerConfigBtn");
 const userConfigStorageKey = "paperseek.ui.user_config";
 let configSaveTimer = null;
 
@@ -1388,56 +1387,6 @@ async function handleResetConfig() {
   }
   if (configSavedBadge) {
     configSavedBadge.textContent = "⟳ " + getTranslatedText("Reset");
-  }
-}
-
-async function handleSaveServerConfig() {
-  if (!saveServerConfigBtn) return;
-  saveServerConfigBtn.disabled = true;
-  const payload = buildPayload();
-  const settings = {
-    DATA_SOURCE: payload.data_source,
-    FEDERATED_PROFILE: payload.federated_profile,
-    FEDERATED_MAX_PER_SOURCE: String(payload.federated_max_per_source),
-    LLM_PROVIDER: payload.llm_provider,
-    LLM_MODEL: payload.llm_model,
-    LLM_API_TYPE: payload.llm_api_type,
-    LLM_BASE_URL: payload.llm_base_url,
-    TARGET_MIN: String(payload.target_min),
-    TARGET_MAX: String(payload.target_max),
-    MAX_ITERATIONS: String(payload.max_iterations),
-    EXPAND_CITATIONS: payload.expand_citations ? "true" : "false",
-    RETRIEVAL_POOL_MAX: String(payload.retrieval_pool_max || 3000),
-    RETRIEVAL_RRF_K: String(payload.retrieval_rrf_k || 60),
-  };
-  if (payload.llm_api_key) settings.LLM_API_KEY = payload.llm_api_key;
-  if (payload.wos_api_key) settings.WOS_API_KEY = payload.wos_api_key;
-  if (payload.openalex_api_key) settings.OPENALEX_API_KEY = payload.openalex_api_key;
-  if (payload.openalex_email) settings.OPENALEX_EMAIL = payload.openalex_email;
-  if (payload.crossref_email) settings.CROSSREF_EMAIL = payload.crossref_email;
-  if (payload.semantic_scholar_api_key) settings.SEMANTIC_SCHOLAR_API_KEY = payload.semantic_scholar_api_key;
-  if (payload.pubmed_api_key) settings.PUBMED_API_KEY = payload.pubmed_api_key;
-  if (payload.pubmed_email) settings.PUBMED_EMAIL = payload.pubmed_email;
-  if (payload.pubmed_tool) settings.PUBMED_TOOL = payload.pubmed_tool;
-  if (payload.serper_api_key) settings.SERPER_API_KEY = payload.serper_api_key;
-
-  try {
-    const res = await fetch("/api/config/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ settings }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (configPersistenceText) {
-      configPersistenceText.textContent = `✓ ${getTranslatedText("Saved settings to server configuration")} (${data.saved_count || 0})`;
-    }
-  } catch (err) {
-    if (configPersistenceText) {
-      configPersistenceText.textContent = `✕ ${getTranslatedText("Failed to save to server")}: ${err.message || err}`;
-    }
-  } finally {
-    saveServerConfigBtn.disabled = false;
   }
 }
 
@@ -3360,9 +3309,6 @@ if (form) {
 }
 if (resetConfigBtn) {
   resetConfigBtn.addEventListener("click", handleResetConfig);
-}
-if (saveServerConfigBtn) {
-  saveServerConfigBtn.addEventListener("click", handleSaveServerConfig);
 }
 
 if (stopButton) {
