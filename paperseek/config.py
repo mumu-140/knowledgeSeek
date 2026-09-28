@@ -226,3 +226,60 @@ def default_base_url(provider: str, api_type: str = "") -> str:
     if api_type == "anthropic_messages" and provider == "anthropic":
         return "https://api.anthropic.com"
     return urls.get(provider, "")
+
+PROVIDER_PRESET_MODELS: dict[str, list[str]] = {
+    "openai": ["gpt-5.4-mini", "gpt-4o", "gpt-4o-mini", "o1", "o1-mini", "o3-mini", "gpt-4-turbo"],
+    "anthropic": ["claude-sonnet-4-6", "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
+    "google": ["gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+    "deepseek": ["deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
+    "siliconflow": [
+        "deepseek-ai/DeepSeek-V4-Flash",
+        "deepseek-ai/DeepSeek-V3",
+        "deepseek-ai/DeepSeek-R1",
+        "Qwen/Qwen2.5-72B-Instruct",
+        "Qwen/Qwen2.5-32B-Instruct",
+        "Qwen/Qwen2.5-7B-Instruct",
+        "THUDM/glm-4-9b-chat",
+        "meta-llama/Meta-Llama-3.1-70B-Instruct",
+    ],
+    "openrouter": [
+        "openai/gpt-5.4-mini",
+        "openai/gpt-4o",
+        "openai/gpt-4o-mini",
+        "deepseek/deepseek-chat",
+        "deepseek/deepseek-r1",
+        "anthropic/claude-3.5-sonnet",
+        "google/gemini-2.5-flash",
+        "meta-llama/llama-3.3-70b-instruct",
+    ],
+    "dashscope": ["qwen3.6-plus", "qwen-max", "qwen-plus", "qwen-turbo", "qwen2.5-72b-instruct", "deepseek-v3", "deepseek-r1"],
+    "zhipu": ["glm-5.1", "glm-4-plus", "glm-4-air", "glm-4-flash", "glm-4-long"],
+    "moonshot": ["kimi-k2.6", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+    "ollama": [
+        "qwen3:8b",
+        "qwen2.5:7b",
+        "qwen2.5:14b",
+        "qwen2.5:32b",
+        "llama3.1:8b",
+        "llama3.3:70b",
+        "deepseek-r1:8b",
+        "deepseek-r1:14b",
+        "mistral:latest",
+    ],
+    "modelscope": [
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "Qwen/Qwen2.5-72B-Instruct",
+        "deepseek-ai/DeepSeek-V3",
+        "deepseek-ai/DeepSeek-R1",
+    ],
+    "cstcloud": ["deepseek-v4-flash", "deepseek-v3", "deepseek-r1", "qwen2.5-72b-instruct"],
+    "volcengine": ["doubao-seed-2-0-mini-260428", "doubao-pro-32k", "doubao-lite-32k", "deepseek-v3", "deepseek-r1"],
+    "hunyuan": ["hunyuan-turbos-latest", "hunyuan-pro", "hunyuan-standard", "hunyuan-lite"],
+    "qianfan": ["ernie-5.0", "ernie-4.0-turbo-8k", "ernie-3.5-8k", "deepseek-v3", "deepseek-r1"],
+    "nvidia": ["nvidia/llama-3.3-nemotron-super-49b-v1.5", "meta/llama-3.3-70b-instruct", "deepseek-ai/deepseek-r1"],
+}
+
+
+def preset_models(provider: str) -> list[str]:
+    provider = (provider or "openai").lower()
+    return list(PROVIDER_PRESET_MODELS.get(provider, []))

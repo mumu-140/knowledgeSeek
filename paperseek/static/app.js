@@ -10,6 +10,9 @@ const dataSourceSelect = document.getElementById("dataSource");
 const providerSelect = document.getElementById("llmProvider");
 const apiTypeSelect = document.getElementById("llmApiType");
 const modelInput = document.getElementById("llmModel");
+const fetchModelsBtn = document.getElementById("fetchModelsBtn");
+const llmModelList = document.getElementById("llmModelList");
+const fetchModelsFeedback = document.getElementById("fetchModelsFeedback");
 const baseUrlInput = document.getElementById("llmBaseUrl");
 const retrievalEmbeddingProviderSelect = document.getElementById("retrievalEmbeddingProvider");
 const retrievalEmbeddingModelInput = document.getElementById("retrievalEmbeddingModel");
@@ -58,6 +61,13 @@ const translations = {
     "Export Results CSV": "导出结果 CSV",
     "Export Log": "导出日志",
     "Ready": "就绪",
+    "Fetch Models": "获取模型",
+    "Fetching...": "获取中...",
+    "Select or type model...": "选择或输入模型...",
+    "models": "个模型",
+    "Fetched": "已成功获取",
+    "Fetch failed": "获取模型失败",
+    "Using preset models": "使用预设模型",
     "Processing": "处理中",
     "Searching": "检索中",
     "Stopping": "停止中",
@@ -380,6 +390,128 @@ const runtimeTranslations = {
     },
   },
 };
+
+
+const providerModelPresets = {
+  openai: ["gpt-5.4-mini", "gpt-4o", "gpt-4o-mini", "o1", "o1-mini", "o3-mini", "gpt-4-turbo"],
+  anthropic: ["claude-sonnet-4-6", "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
+  google: ["gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+  deepseek: ["deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
+  siliconflow: [
+    "deepseek-ai/DeepSeek-V4-Flash",
+    "deepseek-ai/DeepSeek-V3",
+    "deepseek-ai/DeepSeek-R1",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "Qwen/Qwen2.5-32B-Instruct",
+    "Qwen/Qwen2.5-7B-Instruct",
+    "THUDM/glm-4-9b-chat",
+    "meta-llama/Meta-Llama-3.1-70B-Instruct",
+  ],
+  openrouter: [
+    "openai/gpt-5.4-mini",
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "deepseek/deepseek-chat",
+    "deepseek/deepseek-r1",
+    "anthropic/claude-3.5-sonnet",
+    "google/gemini-2.5-flash",
+    "meta-llama/llama-3.3-70b-instruct",
+  ],
+  dashscope: ["qwen3.6-plus", "qwen-max", "qwen-plus", "qwen-turbo", "qwen2.5-72b-instruct", "deepseek-v3", "deepseek-r1"],
+  zhipu: ["glm-5.1", "glm-4-plus", "glm-4-air", "glm-4-flash", "glm-4-long"],
+  moonshot: ["kimi-k2.6", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+  ollama: [
+    "qwen3:8b",
+    "qwen2.5:7b",
+    "qwen2.5:14b",
+    "qwen2.5:32b",
+    "llama3.1:8b",
+    "llama3.3:70b",
+    "deepseek-r1:8b",
+    "deepseek-r1:14b",
+    "mistral:latest",
+  ],
+  modelscope: [
+    "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "deepseek-ai/DeepSeek-V3",
+    "deepseek-ai/DeepSeek-R1",
+  ],
+  cstcloud: ["deepseek-v4-flash", "deepseek-v3", "deepseek-r1", "qwen2.5-72b-instruct"],
+  volcengine: ["doubao-seed-2-0-mini-260428", "doubao-pro-32k", "doubao-lite-32k", "deepseek-v3", "deepseek-r1"],
+  hunyuan: ["hunyuan-turbos-latest", "hunyuan-pro", "hunyuan-standard", "hunyuan-lite"],
+  qianfan: ["ernie-5.0", "ernie-4.0-turbo-8k", "ernie-3.5-8k", "deepseek-v3", "deepseek-r1"],
+  nvidia: ["nvidia/llama-3.3-nemotron-super-49b-v1.5", "meta/llama-3.3-70b-instruct", "deepseek-ai/deepseek-r1"],
+};
+
+function updateModelDatalist(models) {
+  if (!llmModelList) return;
+  llmModelList.innerHTML = "";
+  (models || []).forEach(m => {
+    const opt = document.createElement("option");
+    opt.value = m;
+    llmModelList.appendChild(opt);
+  });
+}
+
+async function handleFetchModels() {
+  if (!fetchModelsBtn) return;
+  const provider = providerSelect ? providerSelect.value : "openai";
+  const baseUrl = baseUrlInput ? baseUrlInput.value.trim() : "";
+  const apiKey = apiKeyInput ? apiKeyInput.value.trim() : "";
+  const apiType = apiTypeSelect ? apiTypeSelect.value : "";
+
+  fetchModelsBtn.classList.add("loading");
+  const textSpan = fetchModelsBtn.querySelector(".btn-fetch-text");
+  if (textSpan) textSpan.textContent = getTranslatedText("Fetching...");
+  if (fetchModelsFeedback) {
+    fetchModelsFeedback.textContent = "";
+    fetchModelsFeedback.className = "field-subnote";
+  }
+
+  try {
+    const res = await fetch("/api/llm/models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        llm_provider: provider,
+        llm_base_url: baseUrl,
+        llm_api_key: apiKey,
+        llm_api_type: apiType,
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const models = data.models || [];
+    updateModelDatalist(models);
+
+    if (data.source === "remote") {
+      if (fetchModelsFeedback) {
+        fetchModelsFeedback.textContent = `✓ ${getTranslatedText("Fetched")} ${models.length} ${getTranslatedText("models")}`;
+        fetchModelsFeedback.className = "field-subnote success";
+      }
+    } else if (data.warning) {
+      if (fetchModelsFeedback) {
+        fetchModelsFeedback.textContent = `⚠ ${data.warning}`;
+        fetchModelsFeedback.className = "field-subnote warning";
+      }
+    }
+
+    if (data.default && (!modelInput.value || !models.includes(modelInput.value))) {
+      modelInput.value = data.default;
+    }
+  } catch (err) {
+    if (fetchModelsFeedback) {
+      fetchModelsFeedback.textContent = `✕ ${getTranslatedText("Fetch failed")}: ${err.message || err}`;
+      fetchModelsFeedback.className = "field-subnote error";
+    }
+  } finally {
+    fetchModelsBtn.classList.remove("loading");
+    if (textSpan) textSpan.textContent = getTranslatedText("Fetch Models");
+  }
+}
 
 const providerDefaults = {
   openai: { model: "gpt-5.4-mini", apiType: "openai_responses", baseUrl: "https://api.openai.com/v1" },
@@ -1065,6 +1197,7 @@ async function loadServerDefaults() {
     if (data.llm_model) {
       modelInput.value = data.llm_model;
     }
+    updateModelDatalist(providerModelPresets[providerSelect.value] || []);
     if (data.llm_base_url) {
       baseUrlInput.value = data.llm_base_url;
     }
@@ -2905,6 +3038,11 @@ function applyProviderDefaults() {
   apiTypeSelect.value = defaults.apiType;
   modelInput.value = defaults.model;
   baseUrlInput.value = defaults.baseUrl;
+  updateModelDatalist(providerModelPresets[providerSelect.value] || []);
+  if (fetchModelsFeedback) {
+    fetchModelsFeedback.textContent = "";
+    fetchModelsFeedback.className = "field-subnote";
+  }
   updateCredentialPlaceholders();
 }
 
@@ -2928,6 +3066,11 @@ if (retrievalEmbeddingProviderSelect) {
 }
 if (retrievalRerankerProviderSelect) {
   retrievalRerankerProviderSelect.addEventListener("change", () => applyRetrievalProviderDefaults("reranker"));
+}
+
+
+if (fetchModelsBtn) {
+  fetchModelsBtn.addEventListener("click", handleFetchModels);
 }
 
 if (stopButton) {

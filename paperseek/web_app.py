@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from paperseek.client import ApiException
-from paperseek.config import AgentConfig, default_api_type, default_base_url, default_model
+from paperseek.config import AgentConfig, default_api_type, default_base_url, default_model, preset_models
 from paperseek.diagnostics import run_doctor, smoke_source
 from paperseek.disciplines import (
     list_discipline_fields,
@@ -28,7 +28,7 @@ from paperseek.disciplines import (
 )
 from paperseek.env_loader import load_env_file
 from paperseek.history import HistoryStore, result_payload_from_search_result, safe_search_params_from_config
-from paperseek.llm_client import LLMError, create_llm_client
+from paperseek.llm_client import LLMError, create_llm_client, fetch_remote_models
 from paperseek.providers import ProviderError
 from paperseek.search_agent import PaperSeekAgent
 from paperseek.source_metadata import list_source_metadata, supported_source_ids
@@ -482,6 +482,58 @@ def history_clear(confirm: bool = Query(default=False)):
         raise HTTPException(status_code=400, detail="Pass confirm=true to clear all local history.")
     store = HistoryStore()
     return {"deleted": store.clear()}
+
+
+
+class ModelsRequest(BaseModel):
+    llm_provider: Optional[str] = "openai"
+    llm_base_url: Optional[str] = ""
+    llm_api_key: Optional[str] = ""
+    llm_api_type: Optional[str] = ""
+
+
+@app.get("/api/llm/models")
+def list_llm_models(provider: str = Query(default="openai")):
+    prov = (provider or "openai").lower()
+    presets = preset_models(prov)
+    return {
+        "provider": prov,
+        "models": presets or ([default_model(prov)] if default_model(prov) else []),
+        "default": default_model(prov),
+        "source": "preset",
+        "count": len(presets),
+    }
+
+
+@app.post("/api/llm/models")
+def get_llm_models(payload: ModelsRequest):
+    provider = (payload.llm_provider or "openai").lower()
+    env_config = AgentConfig.from_env()
+    api_type = (payload.llm_api_type or "").strip() or default_api_type(provider)
+    base_url = (payload.llm_base_url or "").strip() or default_base_url(provider, api_type)
+    api_key = (payload.llm_api_key or "").strip() or env_config.llm_api_key
+
+    presets = preset_models(provider)
+    models, error = fetch_remote_models(provider=provider, base_url=base_url, api_key=api_key)
+
+    if models:
+        return {
+            "provider": provider,
+            "models": models,
+            "default": default_model(provider),
+            "source": "remote",
+            "count": len(models),
+            "message": f"Successfully fetched {len(models)} models from {provider}.",
+        }
+    else:
+        return {
+            "provider": provider,
+            "models": presets or ([default_model(provider)] if default_model(provider) else []),
+            "default": default_model(provider),
+            "source": "preset",
+            "count": len(presets),
+            "warning": error or f"Could not fetch models from {base_url or provider}. Showing preset models.",
+        }
 
 
 @app.post("/api/search")

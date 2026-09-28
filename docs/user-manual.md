@@ -1558,9 +1558,12 @@ Find empirical studies on how digital platforms influence open innovation in fir
 4. **LLM**：
    - LLM Provider（如 deepseek, openai, siliconflow, ollama 等）
    - API Type（`openai_chat`, `openai_response` 等）
-   - Model 名称
+   - Model 名称：支持**一键获取模型（Fetch Models）**与预设智能下拉，免去手动记忆或繁琐输入的负担
    - Base URL 与 API Key
    - 最大生成 Token 数（`Max tokens`）
+
+> **模型获取功能（Fetch Models）**：
+> 点击 Model 栏右上角的 **Fetch Models** 按钮，系统将自动向目标服务端点（OpenAI 兼容 `/v1/models` 或 Ollama `/api/tags`）发起在线探测，拉取可用模型列表并注入下拉菜单。若端点尚未配置或无法连通，系统会自动提供各主流厂商的精选预设模型，确保零网络阻碍下即可快捷点选。
 5. **Source-specific**：
    - 仅在对应数据源激活时动态展示（如 OpenAlex Email / API Key、PubMed Tool / Email、WoS API Key、Serper Key 等）。未选择的数据源专用凭据绝不平铺干扰界面。
 

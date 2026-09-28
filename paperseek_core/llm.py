@@ -425,3 +425,89 @@ def _extract_openai_chat_content(payload) -> str:
     if delta.get("content"):
         return delta["content"]
     raise KeyError("choices[0].message.content")
+
+def fetch_remote_models(
+    provider: str,
+    base_url: str = "",
+    api_key: str = "",
+    timeout: float = 8.0,
+) -> tuple[list[str], str]:
+    """Fetch available models from an LLM provider endpoint.
+
+    Returns:
+        (models, error_message): list of model ids and error description (if any)
+    """
+    provider = (provider or "openai").lower()
+    base_url = (base_url or "").rstrip("/")
+    if not base_url:
+        return [], "No base_url provided"
+
+    urls_to_try = []
+    headers = {"Content-Type": "application/json"}
+
+    if provider == "anthropic":
+        if api_key:
+            headers["x-api-key"] = api_key
+            headers["anthropic-version"] = "2023-06-01"
+        if base_url.endswith("/v1"):
+            urls_to_try.append(f"{base_url}/models")
+        else:
+            urls_to_try.append(f"{base_url}/v1/models")
+    elif provider == "ollama" or ":11434" in base_url:
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if base_url.endswith("/v1"):
+            clean_base = base_url[:-3].rstrip("/")
+            urls_to_try.extend([f"{base_url}/models", f"{clean_base}/api/tags"])
+        else:
+            urls_to_try.extend([f"{base_url}/api/tags", f"{base_url}/v1/models", f"{base_url}/models"])
+    else:
+        # Standard OpenAI-compatible
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if base_url.endswith("/v1"):
+            urls_to_try.append(f"{base_url}/models")
+        else:
+            urls_to_try.extend([f"{base_url}/models", f"{base_url}/v1/models"])
+
+    last_error = ""
+    for url in urls_to_try:
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            if resp.status_code == 200:
+                data = resp.json()
+                raw_items = []
+                if isinstance(data, list):
+                    raw_items = data
+                elif isinstance(data, dict):
+                    raw_items = data.get("data") or data.get("models") or []
+
+                models = []
+                for item in raw_items:
+                    if isinstance(item, dict):
+                        mid = item.get("id") or item.get("name") or item.get("model")
+                    elif isinstance(item, str):
+                        mid = item
+                    else:
+                        mid = None
+                    if mid and isinstance(mid, str) and mid.strip():
+                        models.append(mid.strip())
+
+                if models:
+                    seen = set()
+                    unique_models = []
+                    for m in models:
+                        if m not in seen:
+                            seen.add(m)
+                            unique_models.append(m)
+                    return unique_models, ""
+            else:
+                last_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
+        except requests.Timeout:
+            last_error = f"Connection timeout to {url}"
+        except requests.ConnectionError:
+            last_error = f"Connection refused to {url}"
+        except Exception as e:
+            last_error = str(e)
+
+    return [], last_error

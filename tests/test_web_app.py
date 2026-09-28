@@ -420,5 +420,77 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(data["federated_stats"]["unique"], 10)
 
 
+    def test_llm_models_get_returns_presets(self):
+        response = self.client.get("/api/llm/models?provider=deepseek")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["provider"], "deepseek")
+        self.assertEqual(data["source"], "preset")
+        self.assertIn("deepseek-chat", data["models"])
+        self.assertIn("deepseek-reasoner", data["models"])
+
+    def test_llm_models_post_remote_success(self):
+        fake_response = unittest.mock.MagicMock()
+        fake_response.status_code = 200
+        fake_response.json.return_value = {
+            "data": [
+                {"id": "deepseek-ai/DeepSeek-V3"},
+                {"id": "deepseek-ai/DeepSeek-R1"},
+            ]
+        }
+        with patch("paperseek_core.llm.requests.get", return_value=fake_response):
+            response = self.client.post(
+                "/api/llm/models",
+                json={
+                    "llm_provider": "siliconflow",
+                    "llm_base_url": "https://api.siliconflow.cn/v1",
+                    "llm_api_key": "sk-test",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["source"], "remote")
+        self.assertEqual(data["models"], ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1"])
+        self.assertEqual(data["count"], 2)
+
+    def test_llm_models_post_ollama_tags(self):
+        fake_response = unittest.mock.MagicMock()
+        fake_response.status_code = 200
+        fake_response.json.return_value = {
+            "models": [
+                {"name": "qwen2.5:14b", "model": "qwen2.5:14b"},
+                {"name": "llama3.1:8b", "model": "llama3.1:8b"},
+            ]
+        }
+        with patch("paperseek_core.llm.requests.get", return_value=fake_response):
+            response = self.client.post(
+                "/api/llm/models",
+                json={
+                    "llm_provider": "ollama",
+                    "llm_base_url": "http://127.0.0.1:11434/v1",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["source"], "remote")
+        self.assertEqual(data["models"], ["qwen2.5:14b", "llama3.1:8b"])
+
+    def test_llm_models_post_fallback_on_error(self):
+        import requests
+        with patch("paperseek_core.llm.requests.get", side_effect=requests.ConnectionError("Connection refused")):
+            response = self.client.post(
+                "/api/llm/models",
+                json={
+                    "llm_provider": "openai",
+                    "llm_base_url": "http://unreachable-host-9999.local/v1",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["source"], "preset")
+        self.assertIn("gpt-4o", data["models"])
+        self.assertIn("warning", data)
+
+
 if __name__ == "__main__":
     unittest.main()

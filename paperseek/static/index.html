@@ -238,7 +238,13 @@
                   </label>
                   <label class="field">
                     <span>Reranker Model</span>
-                    <input id="retrievalRerankerModel" type="text" placeholder="Optional" autocomplete="off">
+                    <input id="retrievalRerankerModel" type="text" list="retrievalRerankerModelList" placeholder="Optional" autocomplete="off">
+                    <datalist id="retrievalRerankerModelList">
+                      <option value="qwen3-reranker:8b">
+                      <option value="BAAI/bge-reranker-v2-m3">
+                      <option value="jinaai/jina-reranker-v2-base-multilingual">
+                      <option value="nvidia/llama-3.2-nv-rerankqa-1b-v2">
+                    </datalist>
                   </label>
                   <label class="field">
                     <span>Reranker Base URL</span>
@@ -305,8 +311,16 @@
                     <input id="llmApiKey" type="password" autocomplete="off">
                   </label>
                   <label class="field">
-                    <span>Model</span>
-                    <input id="llmModel" type="text" value="gpt-5.4-mini" autocomplete="off">
+                    <div class="field-title-row">
+                      <span>Model</span>
+                      <button type="button" id="fetchModelsBtn" class="btn-fetch-models" title="Fetch available models from provider API">
+                        <span class="btn-fetch-icon">⟳</span>
+                        <span class="btn-fetch-text">Fetch Models</span>
+                      </button>
+                    </div>
+                    <input id="llmModel" type="text" list="llmModelList" value="gpt-5.4-mini" autocomplete="off" placeholder="Select or type model...">
+                    <datalist id="llmModelList"></datalist>
+                    <span id="fetchModelsFeedback" class="field-subnote"></span>
                   </label>
                   <label class="field">
                     <span>API Type</span>
