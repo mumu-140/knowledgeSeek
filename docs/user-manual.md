@@ -1563,7 +1563,7 @@ Find empirical studies on how digital platforms influence open innovation in fir
    - 最大生成 Token 数（`Max tokens`）
 
 > **模型获取功能（Fetch Models）**：
-> 点击 Model 栏右上角的 **Fetch Models** 按钮，系统将自动向目标服务端点（OpenAI 兼容 `/v1/models` 或 Ollama `/api/tags`）发起在线探测，拉取可用模型列表并注入下拉菜单。若端点尚未配置或无法连通，系统会自动提供各主流厂商的精选预设模型，确保零网络阻碍下即可快捷点选。
+> 点击 Model 栏右上角的 **Fetch Models** 按钮，系统从内置的各主流厂商精选预设模型列表（`GET /api/llm/models?provider=...`）拉取模型清单并注入下拉菜单，全程不向服务器发送 Base URL 或 API Key。列表外的模型 ID 仍可手动输入。
 5. **Source-specific**：
    - 仅在对应数据源激活时动态展示（如 OpenAlex Email / API Key、PubMed Tool / Email、WoS API Key、Serper Key 等）。未选择的数据源专用凭据绝不平铺干扰界面。
 
@@ -1574,15 +1574,18 @@ Find empirical studies on how digital platforms influence open innovation in fir
 
 #### 配置持久化与自动保存（Config Persistence）
 
-为解决每次打开或刷新浏览器都需要重新输入 API Key、切换 Provider 和挑选模型的困扰，Web UI 提供了双层持久化机制：
+为减少每次打开或刷新浏览器时的重复配置，Web UI 提供安全的偏好持久化机制：
 
-1. **浏览器自动静默保存（LocalStorage Auto-Save）**：
-   - 用户在界面上修改的任何参数（检索模式、Federated Profile、Target Scale、LLM Provider、Model、Base URL、API Key、各源密钥等），均会在发生变更时自动保存至当前浏览器的本地缓存。
-   - **下次打开或刷新页面时，系统会自动恢复所有上次使用的设置与模型**，无需重复配置。
+1. **浏览器自动静默保存（LocalStorage Auto-Save，仅限非敏感偏好）**：
+   - 界面参数中的**非敏感偏好**（检索模式、Federated Profile、Target Scale、LLM Provider、API Type、Model 名称、Discipline Fields 开关等）会在发生变更时自动保存至当前浏览器的本地缓存。
+   - **API Key、Base URL 等敏感凭据一律不写入浏览器存储**，也不会写入任何 URL、日志或服务器配置。刷新页面后密钥输入框为空，需要重新输入；这是有意为之的安全设计。
+   - 服务器环境变量已配置的 Key（如 `LLM_API_KEY`）在界面显示为 "Configured via environment"，前端只收到布尔状态，从不接收真实值。
+   - **下次打开或刷新页面时，系统会自动恢复所有非敏感偏好**。
+   - 旧版本曾存入 localStorage 的密钥字段会在下次加载时被自动清除。
    - 高级设置右上角醒目标识 `💾 Remembered（已记住配置）`。
-2. **重置与服务器端持久化**：
+2. **重置**：
    - **Reset to Defaults（恢复默认设置）**：一键清除当前浏览器已保存的自定义配置，恢复至服务器环境变量或初始默认值。
-   - **Save to Server（保存到服务器）**：将当前界面所有设置直接写入服务端的全局配置（`~/.config/paperseek/config.json`），以便跨浏览器和 CLI 命令共享默认参数。
+   - 出于安全考虑，Web UI **不再提供**将界面设置写入服务器配置文件的按钮；服务器端配置请通过 CLI `paperseek config set` 完成。
 
 ---
 
@@ -2246,7 +2249,9 @@ PaperSeek Web UI 导出的 CSV 带 UTF-8 BOM。若仍乱码：
 
 - 不要把真实 API Key 写入 README、Skill、测试或 issue。
 - 不要把 `.env` 提交到 Git。
-- Web UI 表单中的 Key 只用于当前会话。
+- Web UI 表单中的 Key 只用于当前会话：不写入浏览器 localStorage、不写入 URL 或日志、不写入服务器配置文件，刷新后即失效。
+- 浏览器 localStorage 只保存非敏感 UI 偏好（检索模式、数据源、Federated Profile、Provider、Model 名称等）；任何 `*_api_key`、token、密码类字段一律不落盘。`GET /api/config/defaults` 只返回 `has_xxx_api_key` 布尔值，永不返回真实密钥。
+- Web UI 不提供服务器配置写入端点；服务器端配置统一通过 CLI `paperseek config set` 管理。
 - CLI 用户级配置会保存到本地配置文件，`paperseek config list` 会遮蔽密钥。
 
 ### 本地历史数据库
@@ -2419,4 +2424,4 @@ paperseek search "your question" --source openalex --json > papers.json
 
 ### Web UI 会保存我的 Key 吗？
 
-Web UI 默认在**当前浏览器本地缓存（localStorage）**中记住用户配置，方便下次打开直接使用，无需重复输入；只有当用户在 Advanced settings 中显式点击“Save to Server”或使用 CLI `paperseek config set` 时，配置才会写入服务器用户级配置文件。点击“Reset to Defaults”可随时清除浏览器已存配置。
+不会。Web UI 只在**当前浏览器本地缓存（localStorage）**中记住非敏感 UI 偏好（检索模式、数据源、Federated Profile、LLM Provider、Model 名称等）；API Key、Base URL 等敏感凭据从不写入浏览器存储、URL、日志或服务器配置文件，刷新页面后即失效。服务器端默认配置请通过 CLI `paperseek config set` 写入用户级配置文件。点击“Reset to Defaults”可随时清除浏览器已存偏好；旧版本残留的密钥字段会在下次加载时被自动清除。
