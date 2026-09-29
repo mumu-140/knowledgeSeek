@@ -9,6 +9,7 @@ through the full merged candidate pool instead of truncating it before RRF.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -39,6 +40,18 @@ SOURCE_PROFILES: Dict[str, Tuple[str, ...]] = {
     "general": PROFILE_GENERAL,
 }
 DEFAULT_PROFILE = "general"
+
+# Upstream adapters report failures as free-form text ("HTTP 503: ...",
+# "(429) Too Many Requests"). Match whole 3-digit codes only, so counts such as
+# "5000 results" or "50 papers" are never read as a 5xx status.
+_STATUS_CODE_RE = re.compile(r"(?<!\d)([1-5]\d{2})(?!\d)")
+_UPSTREAM_SERVER_ERROR_CODES: Tuple[int, ...] = (500, 501, 502, 503, 504)
+
+
+def _error_status_codes(text: str) -> frozenset:
+    """Return the whole HTTP status codes mentioned in an error message."""
+    return frozenset(int(code) for code in _STATUS_CODE_RE.findall(text))
+
 
 _ALL_REGISTRY_KEYS: Tuple[str, ...] = (
     "arxiv", "semantic_scholar", "sciencedirect", "doaj", "europepmc", "openalex",
@@ -183,13 +196,18 @@ class MosaicFederatedProvider:
             if exc is not None:
                 err_str = str(exc).strip()
                 err_lower = err_str.lower()
-                if "429" in err_str or "rate limit" in err_lower or "too many requests" in err_lower:
+                codes = _error_status_codes(err_str)
+                exc_name = type(exc).__name__.lower()
+                if 429 in codes or "rate limit" in err_lower or "too many requests" in err_lower:
                     return "rate-limited", "Rate limited (429)"
-                if "timeout" in err_lower or "timed out" in err_lower:
+                if "timeout" in exc_name or "timeout" in err_lower or "timed out" in err_lower:
                     return "error", "Request timed out"
-                if "404" in err_str:
+                if 404 in codes:
                     return "empty", "0 papers"
-                if "50" in err_str or "502" in err_str or "503" in err_str or "server error" in err_lower:
+                server_codes = sorted(codes.intersection(_UPSTREAM_SERVER_ERROR_CODES))
+                if server_codes:
+                    return "error", f"Upstream server error ({server_codes[0]})"
+                if "server error" in err_lower:
                     return "error", "Upstream server error"
                 return "error", f"Error: {err_str[:40]}"
             if count == 0:
