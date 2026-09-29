@@ -1,3 +1,4 @@
+import re
 import tempfile
 from pathlib import Path
 from paperseek.providers import PaperAuthor, PaperCitation, PaperIdentifiers, PaperLinks, PaperNames, PaperRecord, PaperSource
@@ -431,92 +432,105 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("deepseek-chat", data["models"])
         self.assertIn("deepseek-reasoner", data["models"])
 
-    def test_llm_models_post_remote_success(self):
-        fake_response = unittest.mock.MagicMock()
-        fake_response.status_code = 200
-        fake_response.json.return_value = {
-            "data": [
-                {"id": "deepseek-ai/DeepSeek-V3"},
-                {"id": "deepseek-ai/DeepSeek-R1"},
-            ]
+    def test_config_defaults_never_returns_secret_values(self):
+        """/api/config/defaults must never echo API key values back to the client."""
+        secrets = {
+            "LLM_API_KEY": "sk-test",
+            "OPENALEX_API_KEY": "oa-test-secret",
+            "WOS_API_KEY": "wos-test-secret",
+            "SEMANTIC_SCHOLAR_API_KEY": "ss-test-secret",
+            "PUBMED_API_KEY": "pubmed-test-secret",
+            "SERPER_API_KEY": "serper-test-secret",
         }
-        with patch("paperseek_core.llm.requests.get", return_value=fake_response):
-            response = self.client.post(
-                "/api/llm/models",
-                json={
-                    "llm_provider": "siliconflow",
-                    "llm_base_url": "https://api.siliconflow.cn/v1",
-                    "llm_api_key": "sk-test",
-                },
-            )
+        with temporary_env(secrets, clear=CONFIG_ENV_KEYS):
+            response = self.client.get("/api/config/defaults")
         self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data["source"], "remote")
-        self.assertEqual(data["models"], ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1"])
-        self.assertEqual(data["count"], 2)
+        payload = response.json()
+        for secret in secrets.values():
+            self.assertNotIn(secret, response.text)
+        # Secrets surface only as has_* booleans.
+        self.assertTrue(payload["has_llm_api_key"])
+        self.assertTrue(payload["has_openalex_api_key"])
+        self.assertTrue(payload["has_wos_api_key"])
+        for key in payload:
+            self.assertFalse(key.endswith("_api_key") and not key.startswith("has_"),
+                             f"raw secret field exposed: {key}")
 
-    def test_llm_models_post_ollama_tags(self):
-        fake_response = unittest.mock.MagicMock()
-        fake_response.status_code = 200
-        fake_response.json.return_value = {
-            "models": [
-                {"name": "qwen2.5:14b", "model": "qwen2.5:14b"},
-                {"name": "llama3.1:8b", "model": "llama3.1:8b"},
-            ]
-        }
-        with patch("paperseek_core.llm.requests.get", return_value=fake_response):
-            response = self.client.post(
-                "/api/llm/models",
-                json={
-                    "llm_provider": "ollama",
-                    "llm_base_url": "http://127.0.0.1:11434/v1",
-                },
-            )
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data["source"], "remote")
-        self.assertEqual(data["models"], ["qwen2.5:14b", "llama3.1:8b"])
-
-    def test_llm_models_post_fallback_on_error(self):
-        import requests
-        with patch("paperseek_core.llm.requests.get", side_effect=requests.ConnectionError("Connection refused")):
-            response = self.client.post(
-                "/api/llm/models",
-                json={
-                    "llm_provider": "openai",
-                    "llm_base_url": "http://unreachable-host-9999.local/v1",
-                },
-            )
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data["source"], "preset")
-        self.assertIn("gpt-4o", data["models"])
-        self.assertIn("warning", data)
-
-
-    def test_config_save_endpoint_persists_settings(self):
+    def test_config_save_endpoint_is_not_public(self):
+        """POST /api/config/save was removed; it must not write server config."""
         with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
             with temporary_env(
-                {"PAPERSEEK_CONFIG_FILE": str(Path(tmp) / "config.json")},
+                {"PAPERSEEK_CONFIG_FILE": str(config_path)},
                 clear=CONFIG_ENV_KEYS,
             ):
                 response = self.client.post(
                     "/api/config/save",
-                    json={
-                        "settings": {
-                            "LLM_PROVIDER": "deepseek",
-                            "LLM_MODEL": "deepseek-chat",
-                            "FEDERATED_PROFILE": "biomed",
-                            "FEDERATED_MAX_PER_SOURCE": 35,
-                        }
-                    },
+                    json={"settings": {"LLM_PROVIDER": "deepseek", "LLM_MODEL": "deepseek-chat"}},
                 )
-                self.assertEqual(response.status_code, 200)
-                data = response.json()
-                self.assertEqual(data["status"], "ok")
-                self.assertEqual(data["saved_count"], 4)
-                self.assertIn("LLM_PROVIDER", data["keys"])
-                self.assertIn("FEDERATED_PROFILE", data["keys"])
+                self.assertIn(response.status_code, (404, 405))
+                self.assertFalse(config_path.exists())
+
+    def test_remote_model_discovery_cannot_fetch_arbitrary_url(self):
+        """POST /api/llm/models was removed; no user URL may reach requests.get."""
+        import requests
+
+        with patch("paperseek_core.llm.requests.get") as mock_get:
+            response = self.client.post(
+                "/api/llm/models",
+                json={
+                    "llm_provider": "custom",
+                    "llm_base_url": "http://169.254.169.254/latest/meta-data/",
+                    "llm_api_key": "sk-test",
+                },
+            )
+            self.assertIn(response.status_code, (404, 405))
+            mock_get.assert_not_called()
+        # Preset listing stays available without any network egress.
+        response = self.client.get("/api/llm/models?provider=openai")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["source"], "preset")
+
+    def test_browser_persistence_excludes_secret_fields(self):
+        """app.js must persist only the allowlisted non-secret preference keys."""
+        app_js = Path(__file__).resolve().parent.parent / "paperseek" / "static" / "app.js"
+        source = app_js.read_text(encoding="utf-8")
+        allowlist_match = re.search(r"PERSISTED_CONFIG_KEYS\s*=\s*\[(.*?)\]", source, re.DOTALL)
+        self.assertIsNotNone(allowlist_match, "PERSISTED_CONFIG_KEYS allowlist missing from app.js")
+        allowlist = re.findall(r'"([a-z0-9_]+)"', allowlist_match.group(1))
+        self.assertTrue(allowlist, "PERSISTED_CONFIG_KEYS allowlist is empty")
+        forbidden = {"llm_api_key", "llm_base_url", "wos_api_key", "openalex_api_key", "openalex_email",
+                     "crossref_email", "semantic_scholar_api_key", "pubmed_api_key", "pubmed_email",
+                     "pubmed_tool", "serper_api_key", "retrieval_embedding_api_key",
+                     "retrieval_embedding_base_url", "retrieval_reranker_api_key",
+                     "retrieval_reranker_base_url"}
+        for key in allowlist:
+            self.assertNotIn(key, forbidden, f"secret-ish field persisted in browser: {key}")
+            self.assertFalse(
+                "api_key" in key or "token" in key or "secret" in key or "password" in key,
+                f"credential-like field persisted: {key}",
+            )
+        # saveUserConfigToLocal must route through the allowlist filter.
+        self.assertIn("pickPersistableConfig(config)", source)
+
+    def test_legacy_browser_secret_fields_are_not_restored(self):
+        """restoreUserConfigFromLocal must purge legacy secret keys from stored state."""
+        app_js = Path(__file__).resolve().parent.parent / "paperseek" / "static" / "app.js"
+        source = app_js.read_text(encoding="utf-8")
+        legacy_match = re.search(r"LEGACY_SENSITIVE_CONFIG_KEYS\s*=\s*\[(.*?)\]", source, re.DOTALL)
+        self.assertIsNotNone(legacy_match, "LEGACY_SENSITIVE_CONFIG_KEYS missing from app.js")
+        legacy_keys = re.findall(r'"([a-z0-9_]+)"', legacy_match.group(1))
+        for required in ("llm_api_key", "wos_api_key", "serper_api_key", "retrieval_embedding_api_key"):
+            self.assertIn(required, legacy_keys, f"legacy purge list missing {required}")
+        # restore must strip unknown fields and never set secret inputs from storage.
+        restore_match = re.search(
+            r"function restoreUserConfigFromLocal\(\)\s*\{(.*?)\n\}", source, re.DOTALL
+        )
+        self.assertIsNotNone(restore_match, "restoreUserConfigFromLocal missing from app.js")
+        restore_body = restore_match.group(1)
+        self.assertIn("hadDisallowedFields", restore_body)
+        for secret_input in ('setVal("llmApiKey"', 'setVal("wosApiKey"', 'setVal("serperApiKey"'):
+            self.assertNotIn(secret_input, restore_body, f"restore writes secret input {secret_input}")
 
 
 if __name__ == "__main__":
