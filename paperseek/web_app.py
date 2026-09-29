@@ -28,9 +28,9 @@ from paperseek.disciplines import (
     source_filter_mode,
 )
 from paperseek.env_loader import load_env_file
-from paperseek.config_store import load_user_config_into_env, set_config_value, CONFIG_KEYS
+from paperseek.config_store import load_user_config_into_env
 from paperseek.history import HistoryStore, result_payload_from_search_result, safe_search_params_from_config
-from paperseek.llm_client import LLMError, create_llm_client, fetch_remote_models
+from paperseek.llm_client import LLMError, create_llm_client
 from paperseek.providers import ProviderError
 from paperseek.search_agent import PaperSeekAgent
 from paperseek.source_metadata import list_source_metadata, supported_source_ids
@@ -90,6 +90,9 @@ class SearchRequest(BaseModel):
     llm_provider: str = ""
     llm_api_type: str = ""
     llm_model: Optional[str] = None
+    # NOTE: llm_base_url / retrieval_embedding_base_url / retrieval_reranker_base_url are
+    # accepted for backward compatibility but IGNORED server-side (SSRF hardening). The
+    # server sources outbound base URLs from trusted env/config only. See _config_from_payload.
     llm_base_url: Optional[str] = None
     llm_max_tokens: Optional[int] = Field(default=None, ge=0, le=8192)
     wos_db: str = "WOS"
@@ -108,11 +111,11 @@ class SearchRequest(BaseModel):
     retrieval_rrf_k: int = Field(default=60, ge=1, le=1000)
     retrieval_embedding_provider: Optional[str] = ""
     retrieval_embedding_model: Optional[str] = ""
-    retrieval_embedding_base_url: Optional[str] = ""
+    retrieval_embedding_base_url: Optional[str] = ""  # accepted-but-ignored (SSRF hardening)
     retrieval_embedding_api_key: Optional[str] = ""
     retrieval_reranker_provider: Optional[str] = ""
     retrieval_reranker_model: Optional[str] = ""
-    retrieval_reranker_base_url: Optional[str] = ""
+    retrieval_reranker_base_url: Optional[str] = ""  # accepted-but-ignored (SSRF hardening)
     retrieval_reranker_api_key: Optional[str] = ""
     retrieval_crossref_enrichment: bool = False
 
@@ -175,6 +178,9 @@ class DiagnosticRequest(BaseModel):
     llm_provider: str = ""
     llm_api_type: str = ""
     llm_model: Optional[str] = None
+    # NOTE: llm_base_url / retrieval_embedding_base_url / retrieval_reranker_base_url are
+    # accepted for backward compatibility but IGNORED server-side (SSRF hardening). The
+    # server sources outbound base URLs from trusted env/config only. See _config_from_payload.
     llm_base_url: Optional[str] = None
     llm_max_tokens: Optional[int] = Field(default=None, ge=0, le=8192)
     wos_db: str = "WOS"
@@ -193,11 +199,11 @@ class DiagnosticRequest(BaseModel):
     retrieval_rrf_k: int = Field(default=60, ge=1, le=1000)
     retrieval_embedding_provider: Optional[str] = ""
     retrieval_embedding_model: Optional[str] = ""
-    retrieval_embedding_base_url: Optional[str] = ""
+    retrieval_embedding_base_url: Optional[str] = ""  # accepted-but-ignored (SSRF hardening)
     retrieval_embedding_api_key: Optional[str] = ""
     retrieval_reranker_provider: Optional[str] = ""
     retrieval_reranker_model: Optional[str] = ""
-    retrieval_reranker_base_url: Optional[str] = ""
+    retrieval_reranker_base_url: Optional[str] = ""  # accepted-but-ignored (SSRF hardening)
     retrieval_reranker_api_key: Optional[str] = ""
     retrieval_crossref_enrichment: bool = False
 
@@ -390,9 +396,11 @@ def _config_from_payload(payload: SearchRequest) -> AgentConfig:
         config.llm_model = payload.llm_model
     elif provider_changed or not config.llm_model:
         config.llm_model = default_model(config.llm_provider)
-    if payload.llm_base_url:
-        config.llm_base_url = payload.llm_base_url
-    elif provider_changed or not config.llm_base_url:
+    # SSRF hardening: llm_base_url is server-sourced only. A client must not be
+    # able to steer the server's outbound LLM request at an arbitrary URL (cloud
+    # metadata 169.254.169.254, localhost, RFC1918). The value comes from trusted
+    # server env/config or the provider default; payload.llm_base_url is ignored.
+    if provider_changed or not config.llm_base_url:
         config.llm_base_url = default_base_url(config.llm_provider, config.llm_api_type)
     if payload.llm_max_tokens is not None:
         config.llm_max_tokens = payload.llm_max_tokens
@@ -410,11 +418,11 @@ def _config_from_payload(payload: SearchRequest) -> AgentConfig:
     config.retrieval_rrf_k = payload.retrieval_rrf_k
     config.retrieval_embedding_provider = (payload.retrieval_embedding_provider or config.retrieval_embedding_provider or "local").strip().lower()
     config.retrieval_embedding_model = payload.retrieval_embedding_model or config.retrieval_embedding_model
-    config.retrieval_embedding_base_url = payload.retrieval_embedding_base_url or config.retrieval_embedding_base_url
+    # SSRF hardening: retrieval_embedding_base_url stays server-sourced (env/config); payload value ignored.
     config.retrieval_embedding_api_key = payload.retrieval_embedding_api_key or config.retrieval_embedding_api_key
     config.retrieval_reranker_provider = (payload.retrieval_reranker_provider or config.retrieval_reranker_provider or "").strip().lower()
     config.retrieval_reranker_model = payload.retrieval_reranker_model or config.retrieval_reranker_model
-    config.retrieval_reranker_base_url = payload.retrieval_reranker_base_url or config.retrieval_reranker_base_url
+    # SSRF hardening: retrieval_reranker_base_url stays server-sourced (env/config); payload value ignored.
     config.retrieval_reranker_api_key = payload.retrieval_reranker_api_key or config.retrieval_reranker_api_key
     config.retrieval_crossref_enrichment = payload.retrieval_crossref_enrichment
     return config
@@ -488,13 +496,6 @@ def history_clear(confirm: bool = Query(default=False)):
 
 
 
-class ModelsRequest(BaseModel):
-    llm_provider: Optional[str] = "openai"
-    llm_base_url: Optional[str] = ""
-    llm_api_key: Optional[str] = ""
-    llm_api_type: Optional[str] = ""
-
-
 @app.get("/api/llm/models")
 def list_llm_models(provider: str = Query(default="openai")):
     prov = (provider or "openai").lower()
@@ -508,58 +509,6 @@ def list_llm_models(provider: str = Query(default="openai")):
     }
 
 
-@app.post("/api/llm/models")
-def get_llm_models(payload: ModelsRequest):
-    provider = (payload.llm_provider or "openai").lower()
-    env_config = AgentConfig.from_env()
-    api_type = (payload.llm_api_type or "").strip() or default_api_type(provider)
-    base_url = (payload.llm_base_url or "").strip() or default_base_url(provider, api_type)
-    api_key = (payload.llm_api_key or "").strip() or env_config.llm_api_key
-
-    presets = preset_models(provider)
-    models, error = fetch_remote_models(provider=provider, base_url=base_url, api_key=api_key)
-
-    if models:
-        return {
-            "provider": provider,
-            "models": models,
-            "default": default_model(provider),
-            "source": "remote",
-            "count": len(models),
-            "message": f"Successfully fetched {len(models)} models from {provider}.",
-        }
-    else:
-        return {
-            "provider": provider,
-            "models": presets or ([default_model(provider)] if default_model(provider) else []),
-            "default": default_model(provider),
-            "source": "preset",
-            "count": len(presets),
-            "warning": error or f"Could not fetch models from {base_url or provider}. Showing preset models.",
-        }
-
-
-
-class SaveConfigRequest(BaseModel):
-    settings: dict[str, Any] = Field(default_factory=dict)
-
-
-@app.post("/api/config/save")
-def save_config_endpoint(payload: SaveConfigRequest):
-    saved = {}
-    for k, v in payload.settings.items():
-        key_upper = str(k).upper().strip()
-        if key_upper in CONFIG_KEYS and v is not None:
-            val_str = str(v).strip()
-            set_config_value(key_upper, val_str)
-            os.environ[key_upper] = val_str
-            saved[key_upper] = val_str
-    return {
-        "status": "ok",
-        "saved_count": len(saved),
-        "keys": list(saved.keys()),
-        "message": f"Saved {len(saved)} configuration settings to server default.",
-    }
 
 @app.post("/api/search")
 def search(payload: SearchRequest):

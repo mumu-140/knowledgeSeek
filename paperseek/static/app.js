@@ -16,9 +16,66 @@ const fetchModelsFeedback = document.getElementById("fetchModelsFeedback");
 const configSavedBadge = document.getElementById("configSavedBadge");
 const configPersistenceText = document.getElementById("configPersistenceText");
 const resetConfigBtn = document.getElementById("resetConfigBtn");
-const saveServerConfigBtn = document.getElementById("saveServerConfigBtn");
 const userConfigStorageKey = "paperseek.ui.user_config";
 let configSaveTimer = null;
+
+// Only these non-sensitive UI/config preferences may be persisted in the browser.
+// Secrets (API keys, tokens, credentials) are NEVER written to localStorage.
+const PERSISTED_CONFIG_KEYS = [
+  "workspace_mode",
+  "data_source",
+  "federated_profile",
+  "federated_max_per_source",
+  "target_scale",
+  "target_min",
+  "target_max",
+  "max_iterations",
+  "retrieval_rrf_k",
+  "retrieval_pool_max",
+  "llm_provider",
+  "llm_model",
+  "llm_api_type",
+  "expand_citations",
+  "fetch_abstracts",
+  "search_field",
+];
+
+// Fields that older builds persisted in the browser but must never be stored.
+// They are actively purged from localStorage on the first restore after upgrade.
+const LEGACY_SENSITIVE_CONFIG_KEYS = [
+  "llm_api_key",
+  "llm_base_url",
+  "wos_api_key",
+  "wos_db",
+  "openalex_api_key",
+  "openalex_email",
+  "crossref_email",
+  "semantic_scholar_api_key",
+  "pubmed_api_key",
+  "pubmed_email",
+  "pubmed_tool",
+  "serper_api_key",
+  "retrieval_embedding_provider",
+  "retrieval_embedding_model",
+  "retrieval_embedding_base_url",
+  "retrieval_embedding_api_key",
+  "retrieval_reranker_provider",
+  "retrieval_reranker_model",
+  "retrieval_reranker_base_url",
+  "retrieval_reranker_api_key",
+];
+
+// Return a copy of a persisted config that contains only allowlisted, non-secret keys.
+function pickPersistableConfig(config) {
+  const clean = {};
+  if (!config || typeof config !== "object") return clean;
+  for (const key of PERSISTED_CONFIG_KEYS) {
+    if (config[key] !== undefined && config[key] !== null) {
+      clean[key] = config[key];
+    }
+  }
+  return clean;
+}
 const baseUrlInput = document.getElementById("llmBaseUrl");
 const retrievalEmbeddingProviderSelect = document.getElementById("retrievalEmbeddingProvider");
 const retrievalEmbeddingModelInput = document.getElementById("retrievalEmbeddingModel");
@@ -469,12 +526,12 @@ function updateModelDatalist(models) {
   });
 }
 
+// Model discovery is preset-only on purpose: the browser never sends the base
+// URL or API key to the server for this lookup, so no user-supplied URL can be
+// fetched server-side. Unlisted models can still be typed into the model field.
 async function handleFetchModels() {
   if (!fetchModelsBtn) return;
   const provider = providerSelect ? providerSelect.value : "openai";
-  const baseUrl = baseUrlInput ? baseUrlInput.value.trim() : "";
-  const apiKey = apiKeyInput ? apiKeyInput.value.trim() : "";
-  const apiType = apiTypeSelect ? apiTypeSelect.value : "";
 
   fetchModelsBtn.classList.add("loading");
   const textSpan = fetchModelsBtn.querySelector(".btn-fetch-text");
@@ -485,16 +542,7 @@ async function handleFetchModels() {
   }
 
   try {
-    const res = await fetch("/api/llm/models", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        llm_provider: provider,
-        llm_base_url: baseUrl,
-        llm_api_key: apiKey,
-        llm_api_type: apiType,
-      }),
-    });
+    const res = await fetch(`/api/llm/models?provider=${encodeURIComponent(provider)}`);
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
@@ -502,16 +550,9 @@ async function handleFetchModels() {
     const models = data.models || [];
     updateModelDatalist(models);
 
-    if (data.source === "remote") {
-      if (fetchModelsFeedback) {
-        fetchModelsFeedback.textContent = `✓ ${getTranslatedText("Fetched")} ${models.length} ${getTranslatedText("models")}`;
-        fetchModelsFeedback.className = "field-subnote success";
-      }
-    } else if (data.warning) {
-      if (fetchModelsFeedback) {
-        fetchModelsFeedback.textContent = `⚠ ${data.warning}`;
-        fetchModelsFeedback.className = "field-subnote warning";
-      }
+    if (fetchModelsFeedback) {
+      fetchModelsFeedback.textContent = `✓ ${models.length} ${getTranslatedText("models")}`;
+      fetchModelsFeedback.className = "field-subnote success";
     }
 
     if (data.default && (!modelInput.value || !models.includes(modelInput.value))) {
@@ -1219,31 +1260,13 @@ function saveUserConfigToLocal() {
         llm_provider: getValue("llmProvider"),
         llm_model: getValue("llmModel"),
         llm_api_type: getValue("llmApiType"),
-        llm_base_url: getValue("llmBaseUrl"),
-        llm_api_key: getValue("llmApiKey"),
         expand_citations: document.getElementById("expandCitations") ? document.getElementById("expandCitations").checked : true,
         fetch_abstracts: document.getElementById("fetchAbstracts") ? document.getElementById("fetchAbstracts").checked : false,
-        wos_api_key: getValue("wosApiKey"),
-        openalex_api_key: getValue("openAlexApiKey"),
-        openalex_email: getValue("openAlexEmail"),
-        crossref_email: getValue("crossrefEmail"),
-        semantic_scholar_api_key: getValue("semanticScholarApiKey"),
-        pubmed_api_key: getValue("pubmedApiKey"),
-        pubmed_email: getValue("pubmedEmail"),
-        pubmed_tool: getValue("pubmedTool"),
-        serper_api_key: getValue("serperApiKey"),
-        wos_db: getValue("wosDb"),
         search_field: getValue("searchField"),
-        retrieval_embedding_provider: getValue("retrievalEmbeddingProvider"),
-        retrieval_embedding_model: getValue("retrievalEmbeddingModel"),
-        retrieval_embedding_base_url: getValue("retrievalEmbeddingBaseUrl"),
-        retrieval_embedding_api_key: getValue("retrievalEmbeddingApiKey"),
-        retrieval_reranker_provider: getValue("retrievalRerankerProvider"),
-        retrieval_reranker_model: getValue("retrievalRerankerModel"),
-        retrieval_reranker_base_url: getValue("retrievalRerankerBaseUrl"),
-        retrieval_reranker_api_key: getValue("retrievalRerankerApiKey"),
       };
-      window.localStorage.setItem(userConfigStorageKey, JSON.stringify(config));
+      // Persist only allowlisted, non-sensitive preferences. Never store API keys,
+      // tokens, base URLs, emails or any other credential material in the browser.
+      window.localStorage.setItem(userConfigStorageKey, JSON.stringify(pickPersistableConfig(config)));
       notifyConfigSaved(true);
       if (configPersistenceText) {
         configPersistenceText.textContent = getTranslatedText("Settings auto-saved in browser");
@@ -1261,6 +1284,19 @@ function restoreUserConfigFromLocal() {
     if (!raw) return false;
     const config = JSON.parse(raw);
     if (!config || typeof config !== "object") return false;
+
+    // Upgrade migration: if a legacy build stored secrets or other disallowed
+    // fields, drop them here and rewrite localStorage with only allowlisted
+    // preferences. Sensitive fields are never read back into inputs.
+    const hadDisallowedFields = Object.keys(config).some(
+      (key) => PERSISTED_CONFIG_KEYS.indexOf(key) === -1
+    );
+    if (hadDisallowedFields) {
+      for (const key of LEGACY_SENSITIVE_CONFIG_KEYS) {
+        delete config[key];
+      }
+      window.localStorage.setItem(userConfigStorageKey, JSON.stringify(pickPersistableConfig(config)));
+    }
 
     if (config.workspace_mode) {
       setWorkspaceMode(config.workspace_mode);
@@ -1302,12 +1338,8 @@ function restoreUserConfigFromLocal() {
     if (config.llm_model && modelInput) {
       modelInput.value = config.llm_model;
     }
-    if (config.llm_base_url && baseUrlInput) {
-      baseUrlInput.value = config.llm_base_url;
-    }
-    if (config.llm_api_key && apiKeyInput) {
-      apiKeyInput.value = config.llm_api_key;
-    }
+    // NOTE: llm_base_url and every *_api_key field are intentionally NOT restored.
+    // Secrets are never persisted, so they are never read back into inputs.
     if (document.getElementById("expandCitations") && config.expand_citations !== undefined) {
       document.getElementById("expandCitations").checked = Boolean(config.expand_citations);
     }
@@ -1319,26 +1351,7 @@ function restoreUserConfigFromLocal() {
       const el = document.getElementById(id);
       if (el && val !== undefined && val !== null) el.value = val;
     };
-    setVal("wosApiKey", config.wos_api_key);
-    setVal("openAlexApiKey", config.openalex_api_key);
-    setVal("openAlexEmail", config.openalex_email);
-    setVal("crossrefEmail", config.crossref_email);
-    setVal("semanticScholarApiKey", config.semantic_scholar_api_key);
-    setVal("pubmedApiKey", config.pubmed_api_key);
-    setVal("pubmedEmail", config.pubmed_email);
-    setVal("pubmedTool", config.pubmed_tool);
-    setVal("serperApiKey", config.serper_api_key);
-    setVal("wosDb", config.wos_db);
     setVal("searchField", config.search_field);
-
-    setVal("retrievalEmbeddingProvider", config.retrieval_embedding_provider);
-    setVal("retrievalEmbeddingModel", config.retrieval_embedding_model);
-    setVal("retrievalEmbeddingBaseUrl", config.retrieval_embedding_base_url);
-    setVal("retrievalEmbeddingApiKey", config.retrieval_embedding_api_key);
-    setVal("retrievalRerankerProvider", config.retrieval_reranker_provider);
-    setVal("retrievalRerankerModel", config.retrieval_reranker_model);
-    setVal("retrievalRerankerBaseUrl", config.retrieval_reranker_base_url);
-    setVal("retrievalRerankerApiKey", config.retrieval_reranker_api_key);
 
     notifyConfigSaved(true);
     return true;
@@ -1358,56 +1371,6 @@ async function handleResetConfig() {
   }
   if (configSavedBadge) {
     configSavedBadge.textContent = "⟳ " + getTranslatedText("Reset");
-  }
-}
-
-async function handleSaveServerConfig() {
-  if (!saveServerConfigBtn) return;
-  saveServerConfigBtn.disabled = true;
-  const payload = buildPayload();
-  const settings = {
-    DATA_SOURCE: payload.data_source,
-    FEDERATED_PROFILE: payload.federated_profile,
-    FEDERATED_MAX_PER_SOURCE: String(payload.federated_max_per_source),
-    LLM_PROVIDER: payload.llm_provider,
-    LLM_MODEL: payload.llm_model,
-    LLM_API_TYPE: payload.llm_api_type,
-    LLM_BASE_URL: payload.llm_base_url,
-    TARGET_MIN: String(payload.target_min),
-    TARGET_MAX: String(payload.target_max),
-    MAX_ITERATIONS: String(payload.max_iterations),
-    EXPAND_CITATIONS: payload.expand_citations ? "true" : "false",
-    RETRIEVAL_POOL_MAX: String(payload.retrieval_pool_max || 3000),
-    RETRIEVAL_RRF_K: String(payload.retrieval_rrf_k || 60),
-  };
-  if (payload.llm_api_key) settings.LLM_API_KEY = payload.llm_api_key;
-  if (payload.wos_api_key) settings.WOS_API_KEY = payload.wos_api_key;
-  if (payload.openalex_api_key) settings.OPENALEX_API_KEY = payload.openalex_api_key;
-  if (payload.openalex_email) settings.OPENALEX_EMAIL = payload.openalex_email;
-  if (payload.crossref_email) settings.CROSSREF_EMAIL = payload.crossref_email;
-  if (payload.semantic_scholar_api_key) settings.SEMANTIC_SCHOLAR_API_KEY = payload.semantic_scholar_api_key;
-  if (payload.pubmed_api_key) settings.PUBMED_API_KEY = payload.pubmed_api_key;
-  if (payload.pubmed_email) settings.PUBMED_EMAIL = payload.pubmed_email;
-  if (payload.pubmed_tool) settings.PUBMED_TOOL = payload.pubmed_tool;
-  if (payload.serper_api_key) settings.SERPER_API_KEY = payload.serper_api_key;
-
-  try {
-    const res = await fetch("/api/config/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ settings }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (configPersistenceText) {
-      configPersistenceText.textContent = `✓ ${getTranslatedText("Saved settings to server configuration")} (${data.saved_count || 0})`;
-    }
-  } catch (err) {
-    if (configPersistenceText) {
-      configPersistenceText.textContent = `✕ ${getTranslatedText("Failed to save to server")}: ${err.message || err}`;
-    }
-  } finally {
-    saveServerConfigBtn.disabled = false;
   }
 }
 
@@ -3330,9 +3293,6 @@ if (form) {
 }
 if (resetConfigBtn) {
   resetConfigBtn.addEventListener("click", handleResetConfig);
-}
-if (saveServerConfigBtn) {
-  saveServerConfigBtn.addEventListener("click", handleSaveServerConfig);
 }
 
 if (stopButton) {
