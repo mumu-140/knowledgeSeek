@@ -526,12 +526,12 @@ function updateModelDatalist(models) {
   });
 }
 
+// Model discovery is preset-only on purpose: the browser never sends the base
+// URL or API key to the server for this lookup, so no user-supplied URL can be
+// fetched server-side. Unlisted models can still be typed into the model field.
 async function handleFetchModels() {
   if (!fetchModelsBtn) return;
   const provider = providerSelect ? providerSelect.value : "openai";
-  const baseUrl = baseUrlInput ? baseUrlInput.value.trim() : "";
-  const apiKey = apiKeyInput ? apiKeyInput.value.trim() : "";
-  const apiType = apiTypeSelect ? apiTypeSelect.value : "";
 
   fetchModelsBtn.classList.add("loading");
   const textSpan = fetchModelsBtn.querySelector(".btn-fetch-text");
@@ -542,16 +542,7 @@ async function handleFetchModels() {
   }
 
   try {
-    const res = await fetch("/api/llm/models", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        llm_provider: provider,
-        llm_base_url: baseUrl,
-        llm_api_key: apiKey,
-        llm_api_type: apiType,
-      }),
-    });
+    const res = await fetch(`/api/llm/models?provider=${encodeURIComponent(provider)}`);
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
@@ -559,16 +550,9 @@ async function handleFetchModels() {
     const models = data.models || [];
     updateModelDatalist(models);
 
-    if (data.source === "remote") {
-      if (fetchModelsFeedback) {
-        fetchModelsFeedback.textContent = `✓ ${getTranslatedText("Fetched")} ${models.length} ${getTranslatedText("models")}`;
-        fetchModelsFeedback.className = "field-subnote success";
-      }
-    } else if (data.warning) {
-      if (fetchModelsFeedback) {
-        fetchModelsFeedback.textContent = `⚠ ${data.warning}`;
-        fetchModelsFeedback.className = "field-subnote warning";
-      }
+    if (fetchModelsFeedback) {
+      fetchModelsFeedback.textContent = `✓ ${models.length} ${getTranslatedText("models")}`;
+      fetchModelsFeedback.className = "field-subnote success";
     }
 
     if (data.default && (!modelInput.value || !models.includes(modelInput.value))) {

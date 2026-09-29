@@ -30,7 +30,7 @@ from paperseek.disciplines import (
 from paperseek.env_loader import load_env_file
 from paperseek.config_store import load_user_config_into_env
 from paperseek.history import HistoryStore, result_payload_from_search_result, safe_search_params_from_config
-from paperseek.llm_client import LLMError, create_llm_client, fetch_remote_models
+from paperseek.llm_client import LLMError, create_llm_client
 from paperseek.providers import ProviderError
 from paperseek.search_agent import PaperSeekAgent
 from paperseek.source_metadata import list_source_metadata, supported_source_ids
@@ -488,13 +488,6 @@ def history_clear(confirm: bool = Query(default=False)):
 
 
 
-class ModelsRequest(BaseModel):
-    llm_provider: Optional[str] = "openai"
-    llm_base_url: Optional[str] = ""
-    llm_api_key: Optional[str] = ""
-    llm_api_type: Optional[str] = ""
-
-
 @app.get("/api/llm/models")
 def list_llm_models(provider: str = Query(default="openai")):
     prov = (provider or "openai").lower()
@@ -506,37 +499,6 @@ def list_llm_models(provider: str = Query(default="openai")):
         "source": "preset",
         "count": len(presets),
     }
-
-
-@app.post("/api/llm/models")
-def get_llm_models(payload: ModelsRequest):
-    provider = (payload.llm_provider or "openai").lower()
-    env_config = AgentConfig.from_env()
-    api_type = (payload.llm_api_type or "").strip() or default_api_type(provider)
-    base_url = (payload.llm_base_url or "").strip() or default_base_url(provider, api_type)
-    api_key = (payload.llm_api_key or "").strip() or env_config.llm_api_key
-
-    presets = preset_models(provider)
-    models, error = fetch_remote_models(provider=provider, base_url=base_url, api_key=api_key)
-
-    if models:
-        return {
-            "provider": provider,
-            "models": models,
-            "default": default_model(provider),
-            "source": "remote",
-            "count": len(models),
-            "message": f"Successfully fetched {len(models)} models from {provider}.",
-        }
-    else:
-        return {
-            "provider": provider,
-            "models": presets or ([default_model(provider)] if default_model(provider) else []),
-            "default": default_model(provider),
-            "source": "preset",
-            "count": len(presets),
-            "warning": error or f"Could not fetch models from {base_url or provider}. Showing preset models.",
-        }
 
 
 
