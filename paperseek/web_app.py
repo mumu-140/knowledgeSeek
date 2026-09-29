@@ -90,6 +90,9 @@ class SearchRequest(BaseModel):
     llm_provider: str = ""
     llm_api_type: str = ""
     llm_model: Optional[str] = None
+    # NOTE: llm_base_url / retrieval_embedding_base_url / retrieval_reranker_base_url are
+    # accepted for backward compatibility but IGNORED server-side (SSRF hardening). The
+    # server sources outbound base URLs from trusted env/config only. See _config_from_payload.
     llm_base_url: Optional[str] = None
     llm_max_tokens: Optional[int] = Field(default=None, ge=0, le=8192)
     wos_db: str = "WOS"
@@ -108,11 +111,11 @@ class SearchRequest(BaseModel):
     retrieval_rrf_k: int = Field(default=60, ge=1, le=1000)
     retrieval_embedding_provider: Optional[str] = ""
     retrieval_embedding_model: Optional[str] = ""
-    retrieval_embedding_base_url: Optional[str] = ""
+    retrieval_embedding_base_url: Optional[str] = ""  # accepted-but-ignored (SSRF hardening)
     retrieval_embedding_api_key: Optional[str] = ""
     retrieval_reranker_provider: Optional[str] = ""
     retrieval_reranker_model: Optional[str] = ""
-    retrieval_reranker_base_url: Optional[str] = ""
+    retrieval_reranker_base_url: Optional[str] = ""  # accepted-but-ignored (SSRF hardening)
     retrieval_reranker_api_key: Optional[str] = ""
     retrieval_crossref_enrichment: bool = False
 
@@ -175,6 +178,9 @@ class DiagnosticRequest(BaseModel):
     llm_provider: str = ""
     llm_api_type: str = ""
     llm_model: Optional[str] = None
+    # NOTE: llm_base_url / retrieval_embedding_base_url / retrieval_reranker_base_url are
+    # accepted for backward compatibility but IGNORED server-side (SSRF hardening). The
+    # server sources outbound base URLs from trusted env/config only. See _config_from_payload.
     llm_base_url: Optional[str] = None
     llm_max_tokens: Optional[int] = Field(default=None, ge=0, le=8192)
     wos_db: str = "WOS"
@@ -193,11 +199,11 @@ class DiagnosticRequest(BaseModel):
     retrieval_rrf_k: int = Field(default=60, ge=1, le=1000)
     retrieval_embedding_provider: Optional[str] = ""
     retrieval_embedding_model: Optional[str] = ""
-    retrieval_embedding_base_url: Optional[str] = ""
+    retrieval_embedding_base_url: Optional[str] = ""  # accepted-but-ignored (SSRF hardening)
     retrieval_embedding_api_key: Optional[str] = ""
     retrieval_reranker_provider: Optional[str] = ""
     retrieval_reranker_model: Optional[str] = ""
-    retrieval_reranker_base_url: Optional[str] = ""
+    retrieval_reranker_base_url: Optional[str] = ""  # accepted-but-ignored (SSRF hardening)
     retrieval_reranker_api_key: Optional[str] = ""
     retrieval_crossref_enrichment: bool = False
 
@@ -390,9 +396,11 @@ def _config_from_payload(payload: SearchRequest) -> AgentConfig:
         config.llm_model = payload.llm_model
     elif provider_changed or not config.llm_model:
         config.llm_model = default_model(config.llm_provider)
-    if payload.llm_base_url:
-        config.llm_base_url = payload.llm_base_url
-    elif provider_changed or not config.llm_base_url:
+    # SSRF hardening: llm_base_url is server-sourced only. A client must not be
+    # able to steer the server's outbound LLM request at an arbitrary URL (cloud
+    # metadata 169.254.169.254, localhost, RFC1918). The value comes from trusted
+    # server env/config or the provider default; payload.llm_base_url is ignored.
+    if provider_changed or not config.llm_base_url:
         config.llm_base_url = default_base_url(config.llm_provider, config.llm_api_type)
     if payload.llm_max_tokens is not None:
         config.llm_max_tokens = payload.llm_max_tokens
@@ -410,11 +418,11 @@ def _config_from_payload(payload: SearchRequest) -> AgentConfig:
     config.retrieval_rrf_k = payload.retrieval_rrf_k
     config.retrieval_embedding_provider = (payload.retrieval_embedding_provider or config.retrieval_embedding_provider or "local").strip().lower()
     config.retrieval_embedding_model = payload.retrieval_embedding_model or config.retrieval_embedding_model
-    config.retrieval_embedding_base_url = payload.retrieval_embedding_base_url or config.retrieval_embedding_base_url
+    # SSRF hardening: retrieval_embedding_base_url stays server-sourced (env/config); payload value ignored.
     config.retrieval_embedding_api_key = payload.retrieval_embedding_api_key or config.retrieval_embedding_api_key
     config.retrieval_reranker_provider = (payload.retrieval_reranker_provider or config.retrieval_reranker_provider or "").strip().lower()
     config.retrieval_reranker_model = payload.retrieval_reranker_model or config.retrieval_reranker_model
-    config.retrieval_reranker_base_url = payload.retrieval_reranker_base_url or config.retrieval_reranker_base_url
+    # SSRF hardening: retrieval_reranker_base_url stays server-sourced (env/config); payload value ignored.
     config.retrieval_reranker_api_key = payload.retrieval_reranker_api_key or config.retrieval_reranker_api_key
     config.retrieval_crossref_enrichment = payload.retrieval_crossref_enrichment
     return config

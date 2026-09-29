@@ -8,7 +8,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from paperseek.web_app import app
-from paperseek.web_app import SearchRequest, _config_from_payload
+from paperseek.web_app import DiagnosticRequest, SearchRequest, _config_from_payload
 from tests.helpers import CONFIG_ENV_KEYS, temporary_env
 
 
@@ -490,6 +490,122 @@ class WebAppTest(unittest.TestCase):
         response = self.client.get("/api/llm/models?provider=openai")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["source"], "preset")
+
+    # SSRF hardening: the outbound base URLs the server dials (LLM, embedding, reranker)
+    # must come from trusted server env/config only. A client payload must never be able to
+    # steer them at cloud metadata (169.254.169.254), localhost, or RFC1918 internal ranges.
+    # _config_from_payload is the sole producer of the AgentConfig used for those outbound
+    # requests, so proving the malicious value never lands on the config proves it never
+    # becomes the runtime outbound URL.
+    SSRF_URLS = (
+        "http://127.0.0.1:9000/v1",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.1/internal",
+        "http://172.16.0.5/v1",
+        "http://192.168.1.1/admin",
+    )
+
+    def test_search_config_ignores_client_supplied_llm_base_url(self):
+        """A client-supplied llm_base_url must not become the outbound LLM URL."""
+        trusted = "https://api.deepseek.com"
+        for url in self.SSRF_URLS:
+            with self.subTest(url=url), temporary_env({
+                "LLM_PROVIDER": "deepseek",
+                "LLM_API_TYPE": "openai_chat",
+                "LLM_MODEL": "deepseek-test",
+                "LLM_BASE_URL": trusted,
+                "LLM_API_KEY": "sk-test",
+            }, clear=CONFIG_ENV_KEYS):
+                # Provider unchanged: the trusted env base URL must be retained verbatim.
+                payload = SearchRequest(question="q", llm_provider="", llm_base_url=url)
+                config = _config_from_payload(payload)
+                self.assertEqual(config.llm_base_url, trusted)
+                self.assertNotEqual(config.llm_base_url, url)
+
+    def test_search_config_uses_provider_default_not_client_base_url_on_switch(self):
+        """Switching provider must fall back to the trusted provider default, never the client URL."""
+        for url in self.SSRF_URLS:
+            with self.subTest(url=url), temporary_env({
+                "LLM_PROVIDER": "deepseek",
+                "LLM_API_TYPE": "openai_chat",
+                "LLM_BASE_URL": "https://api.deepseek.com",
+            }, clear=CONFIG_ENV_KEYS):
+                payload = SearchRequest(
+                    question="q",
+                    llm_provider="openai",
+                    llm_api_type="openai_chat",
+                    llm_base_url=url,
+                )
+                config = _config_from_payload(payload)
+                self.assertNotEqual(config.llm_base_url, url)
+                # It resolves to a server-known provider default, not anything client-supplied.
+                self.assertTrue(config.llm_base_url.startswith("https://"))
+                self.assertNotIn("127.0.0.1", config.llm_base_url)
+                self.assertNotIn("169.254.169.254", config.llm_base_url)
+
+    def test_search_config_ignores_client_supplied_retrieval_base_urls(self):
+        """Client embedding/reranker base URLs must not become outbound URLs."""
+        embed_trusted = "https://embeddings.internal.example/v1"
+        rerank_trusted = "https://rerank.internal.example/v1"
+        for url in self.SSRF_URLS:
+            with self.subTest(url=url), temporary_env({
+                "RETRIEVAL_EMBEDDING_BASE_URL": embed_trusted,
+                "RETRIEVAL_RERANKER_BASE_URL": rerank_trusted,
+            }, clear=CONFIG_ENV_KEYS + ("RETRIEVAL_EMBEDDING_BASE_URL", "RETRIEVAL_RERANKER_BASE_URL")):
+                payload = SearchRequest(
+                    question="q",
+                    retrieval_embedding_base_url=url,
+                    retrieval_reranker_base_url=url,
+                )
+                config = _config_from_payload(payload)
+                self.assertEqual(config.retrieval_embedding_base_url, embed_trusted)
+                self.assertEqual(config.retrieval_reranker_base_url, rerank_trusted)
+                self.assertNotEqual(config.retrieval_embedding_base_url, url)
+                self.assertNotEqual(config.retrieval_reranker_base_url, url)
+
+    def test_retrieval_base_urls_stay_empty_when_env_unset(self):
+        """With no server-side base URL configured, a client value must not fill the gap."""
+        for url in self.SSRF_URLS:
+            with self.subTest(url=url), temporary_env({}, clear=CONFIG_ENV_KEYS + (
+                "RETRIEVAL_EMBEDDING_BASE_URL", "RETRIEVAL_RERANKER_BASE_URL",
+            )):
+                payload = SearchRequest(
+                    question="q",
+                    retrieval_embedding_base_url=url,
+                    retrieval_reranker_base_url=url,
+                )
+                config = _config_from_payload(payload)
+                self.assertEqual(config.retrieval_embedding_base_url, "")
+                self.assertEqual(config.retrieval_reranker_base_url, "")
+
+    def test_diagnostics_config_ignores_client_supplied_base_urls(self):
+        """DiagnosticRequest must be hardened identically to SearchRequest."""
+        embed_trusted = "https://embeddings.internal.example/v1"
+        rerank_trusted = "https://rerank.internal.example/v1"
+        llm_trusted = "https://api.deepseek.com"
+        for url in self.SSRF_URLS:
+            with self.subTest(url=url), temporary_env({
+                "LLM_PROVIDER": "deepseek",
+                "LLM_API_TYPE": "openai_chat",
+                "LLM_MODEL": "deepseek-test",
+                "LLM_BASE_URL": llm_trusted,
+                "RETRIEVAL_EMBEDDING_BASE_URL": embed_trusted,
+                "RETRIEVAL_RERANKER_BASE_URL": rerank_trusted,
+            }, clear=CONFIG_ENV_KEYS + ("RETRIEVAL_EMBEDDING_BASE_URL", "RETRIEVAL_RERANKER_BASE_URL")):
+                payload = DiagnosticRequest(
+                    question="q",
+                    llm_provider="",
+                    llm_base_url=url,
+                    retrieval_embedding_base_url=url,
+                    retrieval_reranker_base_url=url,
+                )
+                config = _config_from_payload(payload)
+                self.assertEqual(config.llm_base_url, llm_trusted)
+                self.assertEqual(config.retrieval_embedding_base_url, embed_trusted)
+                self.assertEqual(config.retrieval_reranker_base_url, rerank_trusted)
+                for value in (config.llm_base_url, config.retrieval_embedding_base_url,
+                              config.retrieval_reranker_base_url):
+                    self.assertNotEqual(value, url)
 
     def test_browser_persistence_excludes_secret_fields(self):
         """app.js must persist only the allowlisted non-secret preference keys."""
