@@ -205,6 +205,38 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("federated_profile", fed.get("supported_parameters", []))
         self.assertIn("federated_max_per_source", fed.get("supported_parameters", []))
 
+    def test_config_defaults_hides_server_managed_custom_base_url(self):
+        with temporary_env({
+            "LLM_PROVIDER": "custom",
+            "LLM_API_TYPE": "openai_chat",
+            "LLM_MODEL": "private-model",
+            "LLM_BASE_URL": "https://private-gateway.example/v1",
+            "LLM_API_KEY": "sk-test",
+        }, clear=CONFIG_ENV_KEYS):
+            response = self.client.get("/api/config/defaults")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["llm_provider"], "custom")
+        self.assertEqual(payload["llm_base_url"], "")
+        self.assertTrue(payload["has_llm_base_url"])
+        self.assertNotIn("private-gateway.example", response.text)
+
+    def test_network_egress_endpoint_never_exposes_proxy_urls(self):
+        env = {
+            "PROXY_POOL": "main,backup",
+            "PROXY_MAIN_URL": "http://proxy-main.example:8080",
+            "PROXY_MAIN_LABEL": "Main Proxy",
+            "PROXY_BACKUP_URL": "http://proxy-backup.example:8080",
+        }
+        with temporary_env(env, clear=tuple(env)):
+            response = self.client.get("/api/network/egress")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual([item["id"] for item in payload["proxies"]], ["main", "backup"])
+        self.assertIn("Main Proxy", response.text)
+        self.assertNotIn("proxy-main.example", response.text)
+        self.assertNotIn("proxy-backup.example", response.text)
+
     def test_config_defaults_includes_federated_settings(self):
         response = self.client.get("/api/config/defaults")
         self.assertEqual(response.status_code, 200)
@@ -471,25 +503,46 @@ class WebAppTest(unittest.TestCase):
                 self.assertIn(response.status_code, (404, 405))
                 self.assertFalse(config_path.exists())
 
-    def test_remote_model_discovery_cannot_fetch_arbitrary_url(self):
-        """POST /api/llm/models was removed; no user URL may reach requests.get."""
-        import requests
-
-        with patch("paperseek_core.llm.requests.get") as mock_get:
+    def test_remote_model_discovery_rejects_unsafe_custom_url_before_network(self):
+        """Unsafe Custom endpoints are rejected before model discovery can perform I/O."""
+        with patch("paperseek.web_app.fetch_remote_models") as fetch_models:
             response = self.client.post(
                 "/api/llm/models",
                 json={
-                    "llm_provider": "custom",
-                    "llm_base_url": "http://169.254.169.254/latest/meta-data/",
-                    "llm_api_key": "sk-test",
+                    "provider": "custom",
+                    "base_url": "http://169.254.169.254/latest/meta-data/",
+                    "api_key": "sk-test",
                 },
             )
-            self.assertIn(response.status_code, (404, 405))
-            mock_get.assert_not_called()
-        # Preset listing stays available without any network egress.
+            self.assertEqual(response.status_code, 400)
+            fetch_models.assert_not_called()
         response = self.client.get("/api/llm/models?provider=openai")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["source"], "preset")
+
+    def test_remote_model_discovery_supports_validated_custom_endpoint(self):
+        from paperseek_core.network.url_policy import ValidatedEndpoint
+        safe = ValidatedEndpoint(
+            url="https://llm.example.com/v1",
+            host="llm.example.com",
+            port=443,
+            addresses=("93.184.216.34",),
+        )
+        with patch("paperseek.web_app.validate_outbound_url", return_value=safe), \
+             patch("paperseek.web_app.fetch_remote_models", return_value=(["model-a", "model-b"], "")) as fetch_models:
+            response = self.client.post(
+                "/api/llm/models",
+                json={
+                    "provider": "custom",
+                    "base_url": safe.url,
+                    "api_key": "sk-test",
+                    "egress_mode": "direct",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["models"], ["model-a", "model-b"])
+        self.assertEqual(response.json()["source"], "remote")
+        self.assertEqual(fetch_models.call_args.kwargs["base_url"], safe.url)
 
     # SSRF hardening: the outbound base URLs the server dials (LLM, embedding, reranker)
     # must come from trusted server env/config only. A client payload must never be able to
@@ -521,6 +574,29 @@ class WebAppTest(unittest.TestCase):
                 config = _config_from_payload(payload)
                 self.assertEqual(config.llm_base_url, trusted)
                 self.assertNotEqual(config.llm_base_url, url)
+
+    def test_custom_provider_accepts_only_validated_session_base_url(self):
+        from paperseek_core.network.url_policy import ValidatedEndpoint
+        safe = ValidatedEndpoint(
+            url="https://llm.example.com/v1",
+            host="llm.example.com",
+            port=443,
+            addresses=("93.184.216.34",),
+        )
+        with patch("paperseek.web_app.validate_outbound_url", return_value=safe), temporary_env({
+            "LLM_PROVIDER": "openai",
+            "LLM_BASE_URL": "https://api.openai.com/v1",
+        }, clear=CONFIG_ENV_KEYS):
+            payload = SearchRequest(
+                question="q",
+                llm_provider="custom",
+                llm_api_type="openai_chat",
+                llm_model="model-a",
+                llm_base_url=safe.url,
+            )
+            config = _config_from_payload(payload)
+        self.assertEqual(config.llm_provider, "custom")
+        self.assertEqual(config.llm_base_url, safe.url)
 
     def test_search_config_uses_provider_default_not_client_base_url_on_switch(self):
         """Switching provider must fall back to the trusted provider default, never the client URL."""
@@ -562,6 +638,55 @@ class WebAppTest(unittest.TestCase):
                 self.assertEqual(config.retrieval_reranker_base_url, rerank_trusted)
                 self.assertNotEqual(config.retrieval_embedding_base_url, url)
                 self.assertNotEqual(config.retrieval_reranker_base_url, url)
+
+    def test_custom_retrieval_base_urls_accept_only_validated_session_urls(self):
+        from paperseek_core.network.url_policy import ValidatedEndpoint
+        safe = ValidatedEndpoint(
+            url="https://ranking.example.com/v1",
+            host="ranking.example.com",
+            port=443,
+            addresses=("93.184.216.34",),
+        )
+        with patch("paperseek.web_app.validate_outbound_url", return_value=safe):
+            payload = SearchRequest(
+                question="q",
+                retrieval_embedding_provider="custom",
+                retrieval_embedding_base_url=safe.url,
+                retrieval_reranker_provider="custom",
+                retrieval_reranker_base_url=safe.url,
+            )
+            config = _config_from_payload(payload)
+        self.assertEqual(config.retrieval_embedding_base_url, safe.url)
+        self.assertEqual(config.retrieval_reranker_base_url, safe.url)
+
+    def test_custom_retrieval_private_base_url_is_rejected_with_http_400(self):
+        response = self.client.post(
+            "/api/search",
+            json={
+                "question": "q",
+                "llm_provider": "ollama",
+                "llm_api_type": "openai_chat",
+                "retrieval_embedding_provider": "custom",
+                "retrieval_embedding_base_url": "http://169.254.169.254/latest/meta-data/",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Custom endpoint", response.json()["detail"])
+
+    def test_custom_llm_private_base_url_is_rejected_with_http_400(self):
+        response = self.client.post(
+            "/api/search",
+            json={
+                "question": "q",
+                "llm_provider": "custom",
+                "llm_api_type": "openai_chat",
+                "llm_model": "model-a",
+                "llm_api_key": "sk-test",
+                "llm_base_url": "http://169.254.169.254/latest/meta-data/",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Custom endpoint", response.json()["detail"])
 
     def test_retrieval_base_urls_stay_empty_when_env_unset(self):
         """With no server-side base URL configured, a client value must not fill the gap."""
@@ -628,6 +753,9 @@ class WebAppTest(unittest.TestCase):
             )
         # saveUserConfigToLocal must route through the allowlist filter.
         self.assertIn("pickPersistableConfig(config)", source)
+        self.assertIn('providerSelect.value === "custom"', source)
+        self.assertIn("baseUrlInput.readOnly = !custom", source)
+        self.assertIn("baseUrlInputElement.readOnly = !custom", source)
 
     def test_legacy_browser_secret_fields_are_not_restored(self):
         """restoreUserConfigFromLocal must purge legacy secret keys from stored state."""
