@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import threading
 from unittest.mock import patch
 
 import requests
@@ -145,6 +146,23 @@ class EgressRouterTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(router.attempted_routes, ["direct", "main"])
         self.assertEqual(timeouts, [(2.0, 120.0), (8.0, 120.0)])
+
+    def test_route_state_is_thread_local(self):
+        router = EgressRouter(mode="direct", environ={})
+        barrier = threading.Barrier(2)
+        results = {}
+
+        def worker(name, route):
+            router.last_route = route
+            router.attempted_routes = [route]
+            barrier.wait()
+            results[name] = (router.last_route, router.attempted_routes)
+
+        first = threading.Thread(target=worker, args=("a", "direct"))
+        second = threading.Thread(target=worker, args=("b", "backup"))
+        first.start(); second.start(); first.join(); second.join()
+        self.assertEqual(results["a"], ("direct", ["direct"]))
+        self.assertEqual(results["b"], ("backup", ["backup"]))
 
     def test_explicit_proxy_selection_uses_only_named_profiles(self):
         router = EgressRouter(mode="proxy", proxy_ids=["backup"], environ=self._env())

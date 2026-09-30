@@ -519,7 +519,7 @@ class PaperSeekAgent:
             mode=getattr(config, "egress_mode", "auto") or "auto",
             proxy_ids=getattr(config, "egress_proxy_ids", ()) or (),
         )
-        self.abstract_fetcher = abstract_fetcher or AbstractFetcher()
+        self.abstract_fetcher = abstract_fetcher or AbstractFetcher(egress_router=self.egress_router)
         self.data_source = (getattr(config, "data_source", "wos") or "wos").lower()
         self.discipline_fields = normalize_source_filter_values(
             self.data_source,
@@ -572,6 +572,7 @@ class PaperSeekAgent:
                 crossref_email=getattr(config, "crossref_email", ""),
                 semantic_scholar_api_key=getattr(config, "semantic_scholar_api_key", ""),
                 pubmed_api_key=getattr(config, "pubmed_api_key", ""),
+                egress_router=self.egress_router,
             )
         else:
             wos_cfg = Configuration(api_key={"ClarivateApiKeyAuth": config.wos_api_key})
@@ -1464,7 +1465,12 @@ class PaperSeekAgent:
             if not doi:
                 continue
             try:
-                response = requests.get(f"https://api.crossref.org/works/{doi}", headers=headers, timeout=20)
+                response = self.egress_router.request(
+                    "GET",
+                    f"https://api.crossref.org/works/{doi}",
+                    headers=headers,
+                    timeout=20,
+                )
                 if response.status_code < 200 or response.status_code >= 300:
                     continue
                 message = (response.json().get("message") or {})

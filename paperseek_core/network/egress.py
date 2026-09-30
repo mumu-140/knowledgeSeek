@@ -5,7 +5,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from threading import Lock
+from threading import Lock, local
 from typing import Iterable, Mapping, Sequence
 
 import requests
@@ -148,8 +148,27 @@ class EgressRouter:
         self.failure_threshold = _int_env(self.environ, "PROXY_FAILURE_THRESHOLD", 3)
         self.cooldown_seconds = _int_env(self.environ, "PROXY_COOLDOWN_SECONDS", 60)
         self.retry_429 = _bool_env(self.environ, "EGRESS_RETRY_429", False)
-        self.last_route = ""
-        self.attempted_routes: list[str] = []
+        self._state = local()
+
+    @property
+    def last_route(self) -> str:
+        return getattr(self._state, "last_route", "")
+
+    @last_route.setter
+    def last_route(self, value: str) -> None:
+        self._state.last_route = value
+
+    @property
+    def attempted_routes(self) -> list[str]:
+        routes = getattr(self._state, "attempted_routes", None)
+        if routes is None:
+            routes = []
+            self._state.attempted_routes = routes
+        return routes
+
+    @attempted_routes.setter
+    def attempted_routes(self, value) -> None:
+        self._state.attempted_routes = list(value or [])
 
     def _selected_profiles(self) -> list[ProxyProfile]:
         profiles = list(self.profiles)
