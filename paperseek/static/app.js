@@ -10,7 +10,78 @@ const dataSourceSelect = document.getElementById("dataSource");
 const providerSelect = document.getElementById("llmProvider");
 const apiTypeSelect = document.getElementById("llmApiType");
 const modelInput = document.getElementById("llmModel");
+const fetchModelsBtn = document.getElementById("fetchModelsBtn");
+const llmModelList = document.getElementById("llmModelList");
+const fetchModelsFeedback = document.getElementById("fetchModelsFeedback");
+const configSavedBadge = document.getElementById("configSavedBadge");
+const configPersistenceText = document.getElementById("configPersistenceText");
+const resetConfigBtn = document.getElementById("resetConfigBtn");
+const userConfigStorageKey = "paperseek.ui.user_config";
+let configSaveTimer = null;
+
+// Only these non-sensitive UI/config preferences may be persisted in the browser.
+// Secrets (API keys, tokens, credentials) are NEVER written to localStorage.
+const PERSISTED_CONFIG_KEYS = [
+  "workspace_mode",
+  "data_source",
+  "federated_profile",
+  "federated_max_per_source",
+  "target_scale",
+  "target_min",
+  "target_max",
+  "max_iterations",
+  "retrieval_rrf_k",
+  "retrieval_pool_max",
+  "llm_provider",
+  "llm_model",
+  "llm_api_type",
+  "egress_mode",
+  "egress_proxy_ids",
+  "expand_citations",
+  "fetch_abstracts",
+  "search_field",
+];
+
+// Fields that older builds persisted in the browser but must never be stored.
+// They are actively purged from localStorage on the first restore after upgrade.
+const LEGACY_SENSITIVE_CONFIG_KEYS = [
+  "llm_api_key",
+  "llm_base_url",
+  "wos_api_key",
+  "wos_db",
+  "openalex_api_key",
+  "openalex_email",
+  "crossref_email",
+  "semantic_scholar_api_key",
+  "pubmed_api_key",
+  "pubmed_email",
+  "pubmed_tool",
+  "serper_api_key",
+  "retrieval_embedding_provider",
+  "retrieval_embedding_model",
+  "retrieval_embedding_base_url",
+  "retrieval_embedding_api_key",
+  "retrieval_reranker_provider",
+  "retrieval_reranker_model",
+  "retrieval_reranker_base_url",
+  "retrieval_reranker_api_key",
+];
+
+// Return a copy of a persisted config that contains only allowlisted, non-secret keys.
+function pickPersistableConfig(config) {
+  const clean = {};
+  if (!config || typeof config !== "object") return clean;
+  for (const key of PERSISTED_CONFIG_KEYS) {
+    if (config[key] !== undefined && config[key] !== null) {
+      clean[key] = config[key];
+    }
+  }
+  return clean;
+}
 const baseUrlInput = document.getElementById("llmBaseUrl");
+const egressModeSelect = document.getElementById("egressMode");
+const egressProxyOptions = document.getElementById("egressProxyOptions");
+const egressStatus = document.getElementById("egressStatus");
 const retrievalEmbeddingProviderSelect = document.getElementById("retrievalEmbeddingProvider");
 const retrievalEmbeddingModelInput = document.getElementById("retrievalEmbeddingModel");
 const retrievalEmbeddingBaseUrlInput = document.getElementById("retrievalEmbeddingBaseUrl");
@@ -39,6 +110,14 @@ const configAlertCloseButton = document.getElementById("configAlertCloseButton")
 const configAlertAdvancedButton = document.getElementById("configAlertAdvancedButton");
 const languageButtons = [...document.querySelectorAll("[data-language]")];
 const languageStorageKey = "paperseek.ui.language";
+const modePillFederated = document.getElementById("modePillFederated");
+const modePillSingle = document.getElementById("modePillSingle");
+const federatedPanel = document.getElementById("federatedPanel");
+const singleSourcePanel = document.getElementById("singleSourcePanel");
+const federatedProfileInput = document.getElementById("federatedProfile");
+const federatedProfileSelect = document.getElementById("federatedProfileSelect");
+const federatedMaxPerSourceInput = document.getElementById("federatedMaxPerSource");
+const targetScaleSelect = document.getElementById("targetScale");
 
 const translations = {
   zh: {
@@ -50,6 +129,22 @@ const translations = {
     "Export Results CSV": "导出结果 CSV",
     "Export Log": "导出日志",
     "Ready": "就绪",
+    "Fetch Models": "获取模型",
+    "Fetching...": "获取中...",
+    "Select or type model...": "选择或输入模型...",
+    "models": "个模型",
+    "Fetched": "已成功获取",
+    "Fetch failed": "获取模型失败",
+    "Using preset models": "使用预设模型",
+    "Settings auto-saved in browser": "配置已自动保存在当前浏览器，下次打开无需重复配置",
+    "Save to Server": "保存到服务器",
+    "Reset to Defaults": "恢复默认设置",
+    "Saved settings to server configuration": "已成功保存配置到服务器",
+    "Cleared browser configuration and restored defaults": "已清除浏览器配置并恢复默认设置",
+    "Failed to save to server": "保存到服务器失败",
+    "Remembered": "已记住配置",
+    "Saving...": "保存中...",
+    "Reset": "已重置",
     "Processing": "处理中",
     "Searching": "检索中",
     "Stopping": "停止中",
@@ -107,6 +202,33 @@ const translations = {
     "Provider default, editable for compatible endpoints": "服务商默认地址，可为兼容端点修改",
     "Source settings": "数据源设置",
     "Data Source": "数据源",
+    "Federated Search": "联合检索",
+    "Federated Search (Multi-source)": "联合检索（MOSAIC 多源）",
+    "Single Source": "单一源检索",
+    "Scholarly Database": "学术数据库",
+    "Multi-source retrieval powered by MOSAIC": "MOSAIC 多源学术检索与去重引擎",
+    "Concurrent retrieval across scholarly indexes with rank-preserving candidate merge.": "并发检索多大学术索引，并在保持排序前提下进行跨源元数据合并去重。",
+    "Biomedical": "生物医学（Biomedical）",
+    "Computer Science": "计算机科学（Computer Science）",
+    "General": "通用学科（General）",
+    "Results scale": "返回篇数",
+    "Max per source": "每源抓取上限",
+    "Profile": "领域预设（Profile）",
+    "Candidate Pool Max": "最大候选池",
+    "RRF k Parameter": "RRF 融合参数 k",
+    "Settings for active retrieval source": "当前检索数据源专属设置",
+    "What literature are you looking for?": "需要检索哪些学术文献？请输入研究课题、意图或核心概念...",
+    "Federated Retrieval": "多源联合检索",
+    "Concurrent multi-source retrieval and deduplication powered by MOSAIC.": "基于 MOSAIC 引擎的多源并发检索与去重合并。",
+    "Waiting to start federated multi-source retrieval.": "等待开始多源联合检索...",
+    "Raw candidates": "原始候选",
+    "Unique after merge": "去重后唯一文献",
+    "Duplicates merged": "已合并重复篇数",
+    "Sources": "检索源清单",
+    "Found in:": "检出于：",
+    "Source:": "数据源：",
+    "Why relevant": "相关性解读",
+    "Show abstract": "查看摘要",
     "OpenAlex API Key": "OpenAlex API Key",
     "Optional if anonymous access is available": "匿名访问可用时可选",
     "OpenAlex Email": "OpenAlex 邮箱",
@@ -346,6 +468,125 @@ const runtimeTranslations = {
   },
 };
 
+
+const providerModelPresets = {
+  openai: ["gpt-5.4-mini", "gpt-4o", "gpt-4o-mini", "o1", "o1-mini", "o3-mini", "gpt-4-turbo"],
+  anthropic: ["claude-sonnet-4-6", "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
+  google: ["gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+  deepseek: ["deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
+  siliconflow: [
+    "deepseek-ai/DeepSeek-V4-Flash",
+    "deepseek-ai/DeepSeek-V3",
+    "deepseek-ai/DeepSeek-R1",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "Qwen/Qwen2.5-32B-Instruct",
+    "Qwen/Qwen2.5-7B-Instruct",
+    "THUDM/glm-4-9b-chat",
+    "meta-llama/Meta-Llama-3.1-70B-Instruct",
+  ],
+  openrouter: [
+    "openai/gpt-5.4-mini",
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "deepseek/deepseek-chat",
+    "deepseek/deepseek-r1",
+    "anthropic/claude-3.5-sonnet",
+    "google/gemini-2.5-flash",
+    "meta-llama/llama-3.3-70b-instruct",
+  ],
+  dashscope: ["qwen3.6-plus", "qwen-max", "qwen-plus", "qwen-turbo", "qwen2.5-72b-instruct", "deepseek-v3", "deepseek-r1"],
+  zhipu: ["glm-5.1", "glm-4-plus", "glm-4-air", "glm-4-flash", "glm-4-long"],
+  moonshot: ["kimi-k2.6", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+  ollama: [
+    "qwen3:8b",
+    "qwen2.5:7b",
+    "qwen2.5:14b",
+    "qwen2.5:32b",
+    "llama3.1:8b",
+    "llama3.3:70b",
+    "deepseek-r1:8b",
+    "deepseek-r1:14b",
+    "mistral:latest",
+  ],
+  modelscope: [
+    "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "deepseek-ai/DeepSeek-V3",
+    "deepseek-ai/DeepSeek-R1",
+  ],
+  cstcloud: ["deepseek-v4-flash", "deepseek-v3", "deepseek-r1", "qwen2.5-72b-instruct"],
+  volcengine: ["doubao-seed-2-0-mini-260428", "doubao-pro-32k", "doubao-lite-32k", "deepseek-v3", "deepseek-r1"],
+  hunyuan: ["hunyuan-turbos-latest", "hunyuan-pro", "hunyuan-standard", "hunyuan-lite"],
+  qianfan: ["ernie-5.0", "ernie-4.0-turbo-8k", "ernie-3.5-8k", "deepseek-v3", "deepseek-r1"],
+  nvidia: ["nvidia/llama-3.3-nemotron-super-49b-v1.5", "meta/llama-3.3-70b-instruct", "deepseek-ai/deepseek-r1"],
+};
+
+function updateModelDatalist(models) {
+  if (!llmModelList) return;
+  llmModelList.innerHTML = "";
+  (models || []).forEach(m => {
+    const opt = document.createElement("option");
+    opt.value = m;
+    llmModelList.appendChild(opt);
+  });
+}
+
+// Model discovery is preset-only on purpose: the browser never sends the base
+// URL or API key to the server for this lookup, so no user-supplied URL can be
+// fetched server-side. Unlisted models can still be typed into the model field.
+async function handleFetchModels() {
+  if (!fetchModelsBtn) return;
+  const provider = providerSelect ? providerSelect.value : "openai";
+
+  fetchModelsBtn.classList.add("loading");
+  const textSpan = fetchModelsBtn.querySelector(".btn-fetch-text");
+  if (textSpan) textSpan.textContent = getTranslatedText("Fetching...");
+  if (fetchModelsFeedback) {
+    fetchModelsFeedback.textContent = "";
+    fetchModelsFeedback.className = "field-subnote";
+  }
+
+  try {
+    const isCustom = provider === "custom";
+    const res = isCustom
+      ? await fetch("/api/llm/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "custom",
+            base_url: getValue("llmBaseUrl"),
+            api_key: getValue("llmApiKey"),
+            egress_mode: egressModeSelect ? egressModeSelect.value : "auto",
+            egress_proxy_ids: selectedEgressProxyIds(),
+          }),
+        })
+      : await fetch(`/api/llm/models?provider=${encodeURIComponent(provider)}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(responseErrorMessage(data, res.status));
+    }
+    const models = data.models || [];
+    updateModelDatalist(models);
+
+    if (fetchModelsFeedback) {
+      fetchModelsFeedback.textContent = `✓ ${models.length} ${getTranslatedText("models")}`;
+      fetchModelsFeedback.className = "field-subnote success";
+    }
+
+    if (data.default && (!modelInput.value || !models.includes(modelInput.value))) {
+      modelInput.value = data.default;
+    }
+  } catch (err) {
+    if (fetchModelsFeedback) {
+      fetchModelsFeedback.textContent = `✕ ${getTranslatedText("Fetch failed")}: ${err.message || err}`;
+      fetchModelsFeedback.className = "field-subnote error";
+    }
+  } finally {
+    fetchModelsBtn.classList.remove("loading");
+    if (textSpan) textSpan.textContent = getTranslatedText("Fetch Models");
+  }
+}
+
 const providerDefaults = {
   openai: { model: "gpt-5.4-mini", apiType: "openai_responses", baseUrl: "https://api.openai.com/v1" },
   anthropic: { model: "claude-sonnet-4-6", apiType: "anthropic_messages", baseUrl: "https://api.anthropic.com" },
@@ -396,6 +637,7 @@ const retrievalProviderDefaults = {
 
 const stageOrder = ["query", "search", "ranking", "results"];
 const sourceLabels = {
+  federated: "Federated Search (Multi-source)",
   openalex: "OpenAlex (precise search)",
   arxiv: "arXiv (preprints)",
   semanticscholar: "Semantic Scholar (broad scholarly graph)",
@@ -406,6 +648,8 @@ const sourceLabels = {
   wos: "Web of Science Starter (temporarily unavailable)",
 };
 const compactSourceLabels = {
+  federated: "Federated Search",
+  mosaic: "MOSAIC Federated",
   openalex: "OpenAlex",
   arxiv: "arXiv",
   semanticscholar: "Semantic Scholar",
@@ -416,6 +660,7 @@ const compactSourceLabels = {
   wos: "Web of Science Starter",
 };
 const sourceMetaLabels = {
+  federated: "Multi-source retrieval powered by MOSAIC.",
   openalex: "Optional OpenAlex API key and email are in Advanced settings.",
   arxiv: "arXiv does not require an API key.",
   semanticscholar: "Semantic Scholar API key is optional in Advanced settings.",
@@ -766,6 +1011,36 @@ function getNumber(id) {
   return Number(document.getElementById(id).value);
 }
 
+function setFederatedProfile(profile) {
+  if (federatedProfileInput) federatedProfileInput.value = profile;
+  if (federatedProfileSelect) federatedProfileSelect.value = profile;
+  document.querySelectorAll(".profile-chip").forEach((chip) => {
+    chip.classList.toggle("active", chip.dataset.profile === profile);
+  });
+}
+
+function setWorkspaceMode(mode) {
+  const isFederated = mode === "federated";
+  if (modePillFederated) modePillFederated.classList.toggle("active", isFederated);
+  if (modePillSingle) modePillSingle.classList.toggle("active", !isFederated);
+  if (federatedPanel) federatedPanel.classList.toggle("is-hidden", !isFederated);
+  if (singleSourcePanel) singleSourcePanel.classList.toggle("is-hidden", isFederated);
+
+  if (isFederated) {
+    if (dataSourceSelect.value !== "federated") {
+      dataSourceSelect.value = "federated";
+      updateSourceFields();
+      updateSourceFilterUi({ reset: true });
+    }
+  } else {
+    if (dataSourceSelect.value === "federated") {
+      dataSourceSelect.value = "openalex";
+      updateSourceFields();
+      updateSourceFilterUi({ reset: true });
+    }
+  }
+}
+
 function updateSourceSummary() {
   const source = dataSourceSelect.value || "openalex";
   if (basicSourceName) {
@@ -969,6 +1244,196 @@ function updateCredentialPlaceholders() {
   }
 }
 
+
+function selectedEgressProxyIds() {
+  if (!egressProxyOptions) return [];
+  return [...egressProxyOptions.querySelectorAll('input[type="checkbox"]:checked')].map((node) => node.value);
+}
+
+function applyEgressProxySelection(ids) {
+  if (!egressProxyOptions) return;
+  const wanted = new Set(Array.isArray(ids) ? ids : []);
+  egressProxyOptions.querySelectorAll('input[type="checkbox"]').forEach((node) => {
+    node.checked = wanted.has(node.value);
+  });
+}
+
+async function loadEgressOptions() {
+  if (!egressModeSelect || !egressProxyOptions) return;
+  try {
+    const response = await fetch("/api/network/egress");
+    const data = await response.json();
+    if (!response.ok) throw new Error(responseErrorMessage(data, response.status));
+    egressModeSelect.value = data.default_mode || "auto";
+    egressProxyOptions.innerHTML = "";
+    (data.proxies || []).forEach((proxy) => {
+      const label = document.createElement("label");
+      label.className = "discipline-option";
+      label.innerHTML = `<input type="checkbox" value="${escapeHtml(proxy.id)}"><span>${escapeHtml(proxy.label || proxy.id)} (${escapeHtml(proxy.status || "ready")})</span>`;
+      egressProxyOptions.appendChild(label);
+    });
+    applyEgressProxySelection(data.default_proxy_ids || []);
+    if (egressStatus) egressStatus.textContent = (data.proxies || []).length ? `${data.proxies.length} server-managed route(s)` : "No server proxy configured; Direct/Auto use direct only.";
+  } catch (error) {
+    if (egressStatus) egressStatus.textContent = `Network routes unavailable: ${error.message}`;
+  }
+}
+
+function notifyConfigSaved(isSaved) {
+  if (configSavedBadge) {
+    if (isSaved) {
+      configSavedBadge.textContent = "💾 " + getTranslatedText("Remembered");
+      configSavedBadge.classList.remove("saving");
+    } else {
+      configSavedBadge.textContent = "⟳ " + getTranslatedText("Saving...");
+      configSavedBadge.classList.add("saving");
+    }
+  }
+}
+
+function saveUserConfigToLocal() {
+  if (!window.localStorage) return;
+  notifyConfigSaved(false);
+  clearTimeout(configSaveTimer);
+  configSaveTimer = setTimeout(() => {
+    try {
+      const mode = (modePillFederated && modePillFederated.classList.contains("active")) ? "federated" : "single";
+      const config = {
+        workspace_mode: mode,
+        data_source: mode === "federated" ? "federated" : getValue("dataSource"),
+        federated_profile: (federatedProfileInput ? federatedProfileInput.value : "") || (federatedProfileSelect ? federatedProfileSelect.value : "") || "general",
+        federated_max_per_source: federatedMaxPerSourceInput ? Number(federatedMaxPerSourceInput.value) : 25,
+        target_scale: targetScaleSelect ? targetScaleSelect.value : "20",
+        target_min: getNumber("targetMin"),
+        target_max: getNumber("targetMax"),
+        max_iterations: getNumber("maxIterations"),
+        retrieval_rrf_k: getNumber("retrievalRrfK"),
+        retrieval_pool_max: getNumber("retrievalPoolMax"),
+        llm_provider: getValue("llmProvider"),
+        llm_model: getValue("llmModel"),
+        llm_api_type: getValue("llmApiType"),
+        egress_mode: egressModeSelect ? egressModeSelect.value : "auto",
+        egress_proxy_ids: selectedEgressProxyIds(),
+        expand_citations: document.getElementById("expandCitations") ? document.getElementById("expandCitations").checked : true,
+        fetch_abstracts: document.getElementById("fetchAbstracts") ? document.getElementById("fetchAbstracts").checked : false,
+        search_field: getValue("searchField"),
+      };
+      // Persist only allowlisted, non-sensitive preferences. Never store API keys,
+      // tokens, base URLs, emails or any other credential material in the browser.
+      window.localStorage.setItem(userConfigStorageKey, JSON.stringify(pickPersistableConfig(config)));
+      notifyConfigSaved(true);
+      if (configPersistenceText) {
+        configPersistenceText.textContent = getTranslatedText("Settings auto-saved in browser");
+      }
+    } catch (e) {
+      console.warn("Failed to save to localStorage:", e);
+    }
+  }, 250);
+}
+
+function restoreUserConfigFromLocal() {
+  if (!window.localStorage) return false;
+  try {
+    const raw = window.localStorage.getItem(userConfigStorageKey);
+    if (!raw) return false;
+    const config = JSON.parse(raw);
+    if (!config || typeof config !== "object") return false;
+
+    // Upgrade migration: if a legacy build stored secrets or other disallowed
+    // fields, drop them here and rewrite localStorage with only allowlisted
+    // preferences. Sensitive fields are never read back into inputs.
+    const hadDisallowedFields = Object.keys(config).some(
+      (key) => PERSISTED_CONFIG_KEYS.indexOf(key) === -1
+    );
+    if (hadDisallowedFields) {
+      for (const key of LEGACY_SENSITIVE_CONFIG_KEYS) {
+        delete config[key];
+      }
+      window.localStorage.setItem(userConfigStorageKey, JSON.stringify(pickPersistableConfig(config)));
+    }
+
+    if (config.workspace_mode) {
+      setWorkspaceMode(config.workspace_mode);
+    }
+    if (config.data_source && dataSourceSelect) {
+      dataSourceSelect.value = config.data_source;
+    }
+    if (config.federated_profile) {
+      setFederatedProfile(config.federated_profile);
+    }
+    if (config.federated_max_per_source && federatedMaxPerSourceInput) {
+      federatedMaxPerSourceInput.value = Number(config.federated_max_per_source);
+    }
+    if (config.target_scale && targetScaleSelect) {
+      targetScaleSelect.value = config.target_scale;
+    }
+    if (Number.isFinite(Number(config.target_min)) && document.getElementById("targetMin")) {
+      document.getElementById("targetMin").value = Number(config.target_min);
+    }
+    if (Number.isFinite(Number(config.target_max)) && document.getElementById("targetMax")) {
+      document.getElementById("targetMax").value = Number(config.target_max);
+    }
+    if (Number.isFinite(Number(config.max_iterations)) && document.getElementById("maxIterations")) {
+      document.getElementById("maxIterations").value = Number(config.max_iterations);
+    }
+    if (Number.isFinite(Number(config.retrieval_rrf_k)) && document.getElementById("retrievalRrfK")) {
+      document.getElementById("retrievalRrfK").value = Number(config.retrieval_rrf_k);
+    }
+    if (Number.isFinite(Number(config.retrieval_pool_max)) && document.getElementById("retrievalPoolMax")) {
+      document.getElementById("retrievalPoolMax").value = Number(config.retrieval_pool_max);
+    }
+    if (config.llm_provider && providerSelect) {
+      providerSelect.value = config.llm_provider;
+      updateModelDatalist(providerModelPresets[config.llm_provider] || []);
+    }
+    if (config.llm_api_type && apiTypeSelect) {
+      apiTypeSelect.value = config.llm_api_type;
+    }
+    if (config.llm_model && modelInput) {
+      modelInput.value = config.llm_model;
+    }
+    if (config.egress_mode && egressModeSelect) {
+      egressModeSelect.value = config.egress_mode;
+    }
+    if (Array.isArray(config.egress_proxy_ids)) {
+      applyEgressProxySelection(config.egress_proxy_ids);
+    }
+    // NOTE: llm_base_url and every *_api_key field are intentionally NOT restored.
+    // Secrets are never persisted, so they are never read back into inputs.
+    if (document.getElementById("expandCitations") && config.expand_citations !== undefined) {
+      document.getElementById("expandCitations").checked = Boolean(config.expand_citations);
+    }
+    if (document.getElementById("fetchAbstracts") && config.fetch_abstracts !== undefined) {
+      document.getElementById("fetchAbstracts").checked = Boolean(config.fetch_abstracts);
+    }
+
+    const setVal = (id, val) => {
+      const el = document.getElementById(id);
+      if (el && val !== undefined && val !== null) el.value = val;
+    };
+    setVal("searchField", config.search_field);
+
+    notifyConfigSaved(true);
+    return true;
+  } catch (e) {
+    console.warn("Failed to restore from localStorage:", e);
+    return false;
+  }
+}
+
+async function handleResetConfig() {
+  if (window.localStorage) {
+    window.localStorage.removeItem(userConfigStorageKey);
+  }
+  await loadServerDefaults();
+  if (configPersistenceText) {
+    configPersistenceText.textContent = getTranslatedText("Cleared browser configuration and restored defaults");
+  }
+  if (configSavedBadge) {
+    configSavedBadge.textContent = "⟳ " + getTranslatedText("Reset");
+  }
+}
+
 async function loadServerDefaults() {
   try {
     const response = await fetch("/api/config/defaults");
@@ -979,6 +1444,13 @@ async function loadServerDefaults() {
     environmentConfig = { ...environmentConfig, ...data };
     if (data.data_source) {
       dataSourceSelect.value = data.data_source;
+      setWorkspaceMode(data.data_source === "federated" ? "federated" : "single");
+    }
+    if (data.federated_profile) {
+      setFederatedProfile(data.federated_profile);
+    }
+    if (data.federated_max_per_source && federatedMaxPerSourceInput) {
+      federatedMaxPerSourceInput.value = Number(data.federated_max_per_source);
     }
     if (data.llm_provider && providerDefaults[data.llm_provider]) {
       providerSelect.value = data.llm_provider;
@@ -989,9 +1461,11 @@ async function loadServerDefaults() {
     if (data.llm_model) {
       modelInput.value = data.llm_model;
     }
+    updateModelDatalist(providerModelPresets[providerSelect.value] || []);
     if (data.llm_base_url) {
       baseUrlInput.value = data.llm_base_url;
     }
+    updateBaseUrlEditability();
     if (Number.isFinite(Number(data.target_min))) {
       document.getElementById("targetMin").value = Number(data.target_min);
     }
@@ -1006,10 +1480,12 @@ async function loadServerDefaults() {
     }
     document.getElementById("fetchAbstracts").checked = Boolean(data.fetch_abstracts);
     document.getElementById("expandCitations").checked = Boolean(data.expand_citations);
+    restoreUserConfigFromLocal();
     updateSourceFields();
     updateCredentialPlaceholders();
     updateSourceSummary();
   } catch (_) {
+    restoreUserConfigFromLocal();
     updateCredentialPlaceholders();
     updateSourceSummary();
   }
@@ -1282,6 +1758,18 @@ function createWorkflowState() {
       query: "",
       body: emptyState("No query generated yet."),
     },
+    federated: {
+      number: "02",
+      title: "Federated Retrieval",
+      status: "WAITING",
+      description: "Concurrent multi-source retrieval and deduplication powered by MOSAIC.",
+      profile: "general",
+      sources: {},
+      raw_total: 0,
+      unique: 0,
+      merged: 0,
+      body: emptyState("Waiting to start federated multi-source retrieval."),
+    },
     search: {
       number: "02",
       title: "Source Request",
@@ -1345,10 +1833,16 @@ function renderWorkflow() {
     return;
   }
 
-  workflow.innerHTML = stageOrder.map((key) => {
-    const item = workflowState[key];
+  const currentSource = (dataSourceSelect && dataSourceSelect.value) ? dataSourceSelect.value : "federated";
+  const activeStages = currentSource === "federated"
+    ? ["query", "federated", "ranking", "results"]
+    : ["query", "search", "ranking", "results"];
+
+  workflow.innerHTML = activeStages.map((key, idx) => {
+    const item = workflowState[key] || {};
+    const num = `0${idx + 1}`;
     const extra = item.status === "PROCESSING" ? "processing-card" : item.status === "ERROR" ? "error-card" : "";
-    return workflowCard(item.number, item.title, item.status, item.description, item.body, extra);
+    return workflowCard(num, item.title || "", item.status || "WAITING", item.description || "", item.body || "", extra);
   }).join("");
 
   applyLanguage(workflow);
@@ -1356,7 +1850,11 @@ function renderWorkflow() {
 }
 
 function renderStepLabel() {
-  const activeIndex = stageOrder.findIndex((key) => workflowState[key].status === "PROCESSING");
+  const currentSource = (dataSourceSelect && dataSourceSelect.value) ? dataSourceSelect.value : "federated";
+  const activeStages = currentSource === "federated"
+    ? ["query", "federated", "ranking", "results"]
+    : ["query", "search", "ranking", "results"];
+  const activeIndex = activeStages.findIndex((key) => workflowState[key] && workflowState[key].status === "PROCESSING");
   if (activeIndex >= 0) {
     stepLabel.textContent = activeLanguage === "zh" ? `步骤 ${activeIndex + 1}/4` : `Step ${activeIndex + 1}/4`;
   } else if (workflowState.results.status === "READY" || workflowState.results.status === "EMPTY") {
@@ -1412,6 +1910,84 @@ function metricRow(items) {
   `).join("")}</div>`;
 }
 
+function renderFederatedStage(item) {
+  const profileName = item.profile ? String(item.profile).toUpperCase() : "GENERAL";
+  const profileDisplay = {
+    biomed: "Biomedical",
+    cs: "Computer Science",
+    general: "General",
+  }[String(item.profile).toLowerCase()] || profileName;
+
+  const sources = item.sources || {};
+  const entries = Object.entries(sources);
+
+  let sourcesListHtml = "";
+  if (entries.length === 0) {
+    sourcesListHtml = emptyState("Connecting to federated scholarly sources...");
+  } else {
+    sourcesListHtml = entries.map(([name, info]) => {
+      const status = String(info.status || "searching").toLowerCase();
+      const count = Number(info.count || 0);
+      const detail = String(info.detail || "").trim();
+
+      let badgeHtml = "";
+      if (status === "searching") {
+        badgeHtml = `<span class="source-status-badge searching"><span class="source-spinner"></span> Searching...</span>`;
+      } else if (status === "success") {
+        badgeHtml = `<span class="source-status-badge success"><span class="icon-check">✓</span> ${count}</span>`;
+      } else if (status === "empty") {
+        badgeHtml = `<span class="source-status-badge empty">0 papers</span>`;
+      } else if (status === "rate-limited") {
+        badgeHtml = `<span class="source-status-badge rate-limited" title="${escapeHtml(detail)}"><span class="icon-warn">⚠</span> ${escapeHtml(detail || "Rate limited (429)")}</span>`;
+      } else if (status === "skipped") {
+        badgeHtml = `<span class="source-status-badge skipped" title="${escapeHtml(detail)}">— ${escapeHtml(detail || "Skipped")}</span>`;
+      } else {
+        badgeHtml = `<span class="source-status-badge error" title="${escapeHtml(detail)}"><span class="icon-err">✕</span> ${escapeHtml(detail || "Error")}</span>`;
+      }
+
+      return `
+        <div class="federated-source-row status-${escapeHtml(status)}">
+          <span class="source-name">${escapeHtml(name)}</span>
+          <div class="source-status-wrap">${badgeHtml}</div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  const rawTotal = item.raw_total || 0;
+  const unique = item.unique || 0;
+  const merged = item.merged || 0;
+
+  return `
+    <div class="federated-stage-content">
+      <div class="federated-stage-header">
+        <span class="federated-stage-label">${escapeHtml(translatedText("Profile"))}</span>
+        <strong class="federated-stage-profile">${escapeHtml(profileDisplay)}</strong>
+      </div>
+
+      <div class="federated-stage-sources">
+        <div class="sources-header">${escapeHtml(translatedText("Sources"))}</div>
+        <div class="sources-grid">${sourcesListHtml}</div>
+      </div>
+
+      <div class="federated-stage-stats">
+        <div class="stat-item">
+          <span class="stat-number">${rawTotal}</span>
+          <span class="stat-caption">${escapeHtml(translatedText("Raw candidates"))}</span>
+        </div>
+        <div class="stat-item highlight">
+          <span class="stat-number">${unique}</span>
+          <span class="stat-caption">${escapeHtml(translatedText("Unique after merge"))}</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-number">${merged}</span>
+          <span class="stat-caption">${escapeHtml(translatedText("Duplicates merged"))}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderRankingStage(item) {
   const metrics = item.status === "COMPLETE" ? metricRow([
     { value: item.totalRecords || 0, label: "TOTAL RECORDS" },
@@ -1422,35 +1998,55 @@ function renderRankingStage(item) {
     { value: item.status || "WAITING", label: "RANKING STATUS" },
     { value: getValue("dataSource").toUpperCase(), label: "SOURCE" },
   ]);
+
   if (!item.rankingSteps || item.rankingSteps.length === 0) {
     return `${metrics}${emptyState("Waiting for ranking progress.")}`;
   }
-  const rows = item.rankingSteps.map((step) => {
+
+  const nodes = item.rankingSteps.map((step) => {
     const total = Number(step.total || 0);
     const current = Number(step.current || 0);
     const percent = total > 0 ? Math.max(0, Math.min(100, Math.round((current / total) * 100))) : 0;
     const hasProgress = total > 0 && ["processing", "complete"].includes(String(step.status || "").toLowerCase());
     const stepTitle = translatedRuntimeText(step.title || step.id || "Ranking step");
-    const stepStatus = translatedStatusText(step.status || "processing");
+    const rawStatus = String(step.status || "processing").toLowerCase();
+    const stepStatus = translatedStatusText(rawStatus);
     const stepDetail = translatedRuntimeText(step.detail || "");
-    const meta = [
-      total > 0 ? `${current}/${total}` : "",
-      step.concurrency ? (activeLanguage === "zh" ? `并发 ${step.concurrency}` : `concurrency ${step.concurrency}`) : "",
-      step.candidate_count ? (activeLanguage === "zh" ? `${step.candidate_count} 个候选` : `${step.candidate_count} candidates`) : "",
-    ].filter(Boolean).join(" · ");
+
+    let metaCount = "";
+    if (step.candidate_count) {
+      metaCount = activeLanguage === "zh" ? `${step.candidate_count} 个候选` : `${step.candidate_count} candidates`;
+    } else if (total > 0 && current > 0) {
+      metaCount = activeLanguage === "zh" ? `${current}/${total} 处理完成` : `${current}/${total} processed`;
+    }
+
+    let statusModifier = rawStatus;
+    if (stepDetail.includes("fallback") || stepDetail.includes("sparse")) {
+      statusModifier = "fallback";
+    } else if (stepDetail.includes("skipped") || stepDetail.includes("Not enabled")) {
+      statusModifier = "skipped";
+    }
+
     return `
-      <section class="ranking-step-row ${escapeHtml(String(step.status || "processing").toLowerCase())}">
-        <div class="ranking-step-topline">
-          <strong>${escapeHtml(stepTitle)}</strong>
-          <span class="action-pill ${escapeHtml(String(step.status || "processing").toLowerCase())}">${escapeHtml(stepStatus)}</span>
+      <div class="pipeline-node ${escapeHtml(statusModifier)}">
+        <div class="node-left">
+          <span class="node-dot"></span>
+          <span class="node-connector"></span>
         </div>
-        ${stepDetail ? `<p>${escapeHtml(stepDetail)}</p>` : ""}
-        ${meta ? `<small>${escapeHtml(meta)}</small>` : ""}
-        ${hasProgress ? `<div class="progress-bar" aria-label="${escapeHtml(`${stepTitle} ${translatedRuntimeText("progress")}`)}"><span style="width: ${percent}%"></span></div>` : ""}
-      </section>
+        <div class="node-content">
+          <div class="node-top">
+            <strong class="node-name">${escapeHtml(stepTitle)}</strong>
+            <span class="node-status-pill ${escapeHtml(statusModifier)}">${escapeHtml(stepStatus)}</span>
+          </div>
+          ${metaCount ? `<div class="node-meta">${escapeHtml(metaCount)}</div>` : ""}
+          ${stepDetail ? `<div class="node-detail">${escapeHtml(stepDetail)}</div>` : ""}
+          ${hasProgress ? `<div class="progress-bar"><span style="width: ${percent}%"></span></div>` : ""}
+        </div>
+      </div>
     `;
   }).join("");
-  return `${metrics}<div class="ranking-step-list">${rows}</div>`;
+
+  return `${metrics}<div class="pipeline-flow">${nodes}</div>`;
 }
 
 function renderHistory(history, finalQuery, preview) {
@@ -1541,6 +2137,55 @@ function renderPapers(papers) {
   `;
 }
 
+function renderCompactSummary(res) {
+  if (!res) return "";
+  const stats = res.federated_stats;
+  const rankedCount = (res.ranked || []).length;
+  const poolCount = (res.citation_map && res.citation_map.candidate_pool) || (stats && stats.unique) || res.total || rankedCount;
+
+  let summaryParts = [];
+  if (stats) {
+    const sourceCount = Object.keys(stats.per_source || stats.source_details || {}).length;
+    summaryParts.push(activeLanguage === "zh"
+      ? `从 ${sourceCount} 个源检索到 ${stats.unique} 篇去重文献`
+      : `Found ${stats.unique} unique papers from ${sourceCount} sources`);
+    if (stats.merged > 0) {
+      summaryParts.push(activeLanguage === "zh"
+        ? `合并 ${stats.merged} 篇重复文献`
+        : `${stats.merged} duplicates merged`);
+    }
+  } else {
+    summaryParts.push(activeLanguage === "zh"
+      ? `共检索到 ${res.total || rankedCount} 篇文献`
+      : `Found ${res.total || rankedCount} total papers`);
+  }
+
+  summaryParts.push(activeLanguage === "zh"
+    ? `${poolCount} 篇进入排序流水线`
+    : `${poolCount} papers entered ranking pipeline`);
+  summaryParts.push(activeLanguage === "zh"
+    ? `展示前 ${rankedCount} 篇最终文献`
+    : `${rankedCount} final papers shown`);
+
+  let warningHtml = "";
+  if (res.federated_errors && res.federated_errors.length > 0) {
+    const errorText = res.federated_errors.join("; ");
+    warningHtml = `
+      <div class="summary-warning-line">
+        <span>⚠</span>
+        <span>${activeLanguage === "zh" ? "检索结果为部分结果（部分数据源受限）：" : "Results are partial: "}${escapeHtml(errorText)}</span>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="compact-summary-banner">
+      <div class="summary-stats-line">${summaryParts.join(" · ")}</div>
+      ${warningHtml}
+    </div>
+  `;
+}
+
 function renderResultsView() {
   const allPapers = latestResult && latestResult.ranked ? latestResult.ranked : [];
   if (!latestResult) {
@@ -1559,6 +2204,8 @@ function renderResultsView() {
 
   const filtered = getFilteredPapers();
   const selectedCount = selectedPapers().length;
+  const summaryBox = renderCompactSummary(latestResult);
+
   return `
     <section class="workspace-view results-view">
       <div class="workspace-header">
@@ -1571,6 +2218,7 @@ function renderResultsView() {
           <span>${escapeHtml(selectedCount)} ${escapeHtml(translatedText("selected"))}</span>
         </div>
       </div>
+      ${summaryBox}
       <div class="results-toolbar">
         <input id="resultSearch" type="search" value="${escapeHtml(resultFilters.query)}" placeholder="${escapeHtml(translatedText("Search title, author, abstract, DOI"))}">
         <select id="resultMinScore">
@@ -1602,36 +2250,78 @@ function renderResultsView() {
 function renderResultRows(papers) {
   return `
     <div class="review-list">
-      ${papers.map((paper) => {
+      ${papers.map((paper, index) => {
         const id = paperId(paper);
         const checked = selectedPaperIds.has(id) ? " checked" : "";
-        const authors = paper.authors && paper.authors.length ? paper.authors.slice(0, 8).join(", ") : translatedText("No author metadata");
-        const meta = [
-          `${translatedText("Rank")} ${paper.rank || ""}`,
-          paper.score !== undefined ? `${paper.score}/10` : "",
-          paper.publish_year || "",
-          paper.citations ? `${paper.citations} ${translatedText("citations")}` : "",
-          paper.source || "",
-        ].filter(Boolean).join(" | ");
-        const record = paper.links && paper.links.record ? `<a href="${escapeHtml(paper.links.record)}" target="_blank" rel="noreferrer">${escapeHtml(translatedText("Record"))}</a>` : "";
-        const pdf = paper.links && paper.links.pdf ? `<a href="${escapeHtml(paper.links.pdf)}" target="_blank" rel="noreferrer">PDF</a>` : "";
-        return `
-          <details class="review-row" open>
-            <summary>
-              <input class="paper-select" type="checkbox" value="${escapeHtml(id)}"${checked} aria-label="${escapeHtml(translatedText("Select paper"))}">
-              <span class="score">${escapeHtml(paper.score ?? 0)}/10</span>
-              <span class="paper-title">${escapeHtml(paper.title || "(no title)")}</span>
-            </summary>
-            <div class="paper-body">
-              <p>${escapeHtml(authors)}</p>
-              <p>${escapeHtml(meta)}</p>
-              ${paper.doi ? `<p><strong>DOI:</strong> ${escapeHtml(paper.doi)}</p>` : ""}
-              ${paper.keywords ? `<p><strong>${escapeHtml(translatedText("Keywords:"))}</strong> ${escapeHtml(paper.keywords)}</p>` : ""}
-              ${paper.abstract ? `<p><strong>${escapeHtml(translatedText("Abstract:"))}</strong> ${escapeHtml(paper.abstract.slice(0, 1400))}${paper.abstract.length > 1400 ? "..." : ""}</p>` : ""}
-              ${paper.reasoning ? `<p><strong>${escapeHtml(translatedText("Reasoning:"))}</strong> ${escapeHtml(paper.reasoning)}</p>` : ""}
-              <div class="paper-links">${record} ${pdf}</div>
+        const authors = paper.authors && paper.authors.length ? paper.authors.slice(0, 5).join(", ") + (paper.authors.length > 5 ? " et al." : "") : translatedText("No author metadata");
+
+        let provenanceHtml = "";
+        if (paper.mosaic_sources && paper.mosaic_sources.length > 0) {
+          const chips = paper.mosaic_sources.map(s => `<span class="provenance-chip">${escapeHtml(s)}</span>`).join("");
+          provenanceHtml = `
+            <div class="provenance-strip">
+              <span class="provenance-label">${escapeHtml(translatedText("Found in:"))}</span>
+              <div class="provenance-tags">${chips}</div>
             </div>
-          </details>
+          `;
+        } else if (paper.provider || paper.source) {
+          provenanceHtml = `
+            <div class="provenance-strip">
+              <span class="provenance-label">${escapeHtml(translatedText("Source:"))}</span>
+              <div class="provenance-tags"><span class="provenance-chip">${escapeHtml(paper.provider || paper.source)}</span></div>
+            </div>
+          `;
+        }
+
+        const actions = [];
+        if (paper.doi) {
+          actions.push(`<a class="action-btn doi" href="https://doi.org/${encodeURI(paper.doi)}" target="_blank" rel="noopener">DOI: ${escapeHtml(paper.doi)}</a>`);
+        }
+        if (paper.pdf_url || (paper.links && paper.links.pdf)) {
+          const pdfLink = paper.pdf_url || paper.links.pdf;
+          actions.push(`<a class="action-btn pdf" href="${escapeHtml(pdfLink)}" target="_blank" rel="noopener">📄 PDF</a>`);
+        }
+        if (paper.links && (paper.links.record || paper.links.landing_page)) {
+          const recLink = paper.links.record || paper.links.landing_page;
+          actions.push(`<a class="action-btn record" href="${escapeHtml(recLink)}" target="_blank" rel="noopener">↗ ${escapeHtml(translatedText("Record"))}</a>`);
+        }
+
+        return `
+          <article class="paper-card">
+            <div class="card-header">
+              <div class="card-title-row">
+                <input class="paper-select" type="checkbox" value="${escapeHtml(id)}"${checked} aria-label="${escapeHtml(translatedText("Select paper"))}">
+                <span class="rank-badge">#${escapeHtml(paper.rank || (index + 1))}</span>
+                <h3 class="paper-title">${escapeHtml(paper.title || "(no title)")}</h3>
+                <span class="score-pill">${escapeHtml(paper.score ?? 0)}/10</span>
+              </div>
+              <div class="paper-meta-line">
+                <span class="authors">${escapeHtml(authors)}</span>
+                <span class="meta-dot">·</span>
+                <span class="year">${escapeHtml(paper.publish_year || "Unknown")}</span>
+                ${paper.source ? `<span class="meta-dot">·</span><span class="venue">${escapeHtml(paper.source)}</span>` : ""}
+                ${paper.citations ? `<span class="citation-tag">${escapeHtml(paper.citations)} citations</span>` : ""}
+              </div>
+            </div>
+
+            ${provenanceHtml}
+
+            ${paper.reasoning ? `
+              <div class="paper-relevance-box">
+                <div class="relevance-label">${escapeHtml(translatedText("Why relevant"))}</div>
+                <p class="relevance-body">${escapeHtml(paper.reasoning)}</p>
+              </div>
+            ` : ""}
+
+            ${paper.abstract ? `
+              <details class="abstract-details">
+                <summary class="abstract-toggle">${escapeHtml(translatedText("Show abstract"))}</summary>
+                <div class="abstract-content">${escapeHtml(paper.abstract)}</div>
+              </details>
+            ` : ""}
+
+            ${actions.length ? `<div class="card-actions-bar">${actions.join(" ")}</div>` : ""}
+          </article>
         `;
       }).join("")}
     </div>
@@ -2209,6 +2899,20 @@ function bindCitationGraphInteractions(container) {
 }
 
 function applyStageEvent(event) {
+  if (event.stage === "federated_retrieval") {
+    const stage = workflowState.federated;
+    stage.status = (event.status || "processing").toUpperCase();
+    if (event.data) {
+      if (event.data.profile) stage.profile = event.data.profile;
+      if (event.data.sources) stage.sources = event.data.sources;
+      if (event.data.raw_total !== undefined) stage.raw_total = event.data.raw_total;
+      if (event.data.unique !== undefined) stage.unique = event.data.unique;
+      if (event.data.merged !== undefined) stage.merged = event.data.merged;
+    }
+    stage.body = renderFederatedStage(stage);
+    renderWorkflow();
+    return;
+  }
   const stage = workflowState[event.stage];
   if (!stage) {
     return;
@@ -2285,6 +2989,16 @@ function applyFinalResult(data) {
   `;
 
   workflowState.search.status = "COMPLETE";
+  if (data.federated_stats) {
+    const stage = workflowState.federated;
+    stage.status = "COMPLETE";
+    stage.profile = data.federated_profile || data.federated_stats.profile || "general";
+    stage.sources = data.federated_stats.source_details || data.federated_stats.sources || {};
+    stage.raw_total = data.federated_stats.raw_total || 0;
+    stage.unique = data.federated_stats.unique || 0;
+    stage.merged = data.federated_stats.merged || 0;
+    stage.body = renderFederatedStage(stage);
+  }
   workflowState.search.body = renderHistory(data.history, data.final_query, []);
   workflowState.search.description = `Accepted query returned ${data.total} total records.`;
 
@@ -2439,6 +3153,8 @@ function buildPayload() {
   return {
     question: getValue("question"),
     data_source: getValue("dataSource"),
+    federated_profile: (federatedProfileInput ? federatedProfileInput.value : "") || (federatedProfileSelect ? federatedProfileSelect.value : "") || "general",
+    federated_max_per_source: (federatedMaxPerSourceInput ? Number(federatedMaxPerSourceInput.value) : 25) || 25,
     wos_api_key: getValue("wosApiKey"),
     openalex_api_key: getValue("openAlexApiKey"),
     openalex_email: getValue("openAlexEmail"),
@@ -2453,6 +3169,8 @@ function buildPayload() {
     llm_api_type: getValue("llmApiType"),
     llm_model: getValue("llmModel"),
     llm_base_url: getValue("llmBaseUrl"),
+    egress_mode: egressModeSelect ? egressModeSelect.value : "auto",
+    egress_proxy_ids: selectedEgressProxyIds(),
     retrieval_embedding_provider: getValue("retrievalEmbeddingProvider") || "local",
     retrieval_embedding_model: getValue("retrievalEmbeddingModel"),
     retrieval_embedding_base_url: getValue("retrievalEmbeddingBaseUrl"),
@@ -2584,12 +3302,29 @@ function handleStreamEvent(event) {
   }
 }
 
+function updateBaseUrlEditability() {
+  if (!baseUrlInput || !providerSelect) return;
+  const custom = providerSelect.value === "custom";
+  baseUrlInput.readOnly = !custom;
+  baseUrlInput.setAttribute("aria-readonly", custom ? "false" : "true");
+  baseUrlInput.title = custom
+    ? "Custom endpoints are session-only and validated server-side before use."
+    : "Known providers use a trusted fixed endpoint; choose Custom to enter another URL.";
+}
+
 function applyProviderDefaults() {
   const defaults = providerDefaults[providerSelect.value] || providerDefaults.custom;
   apiTypeSelect.value = defaults.apiType;
   modelInput.value = defaults.model;
   baseUrlInput.value = defaults.baseUrl;
+  updateBaseUrlEditability();
+  updateModelDatalist(providerModelPresets[providerSelect.value] || []);
+  if (fetchModelsFeedback) {
+    fetchModelsFeedback.textContent = "";
+    fetchModelsFeedback.className = "field-subnote";
+  }
   updateCredentialPlaceholders();
+  saveUserConfigToLocal();
 }
 
 providerSelect.addEventListener("change", applyProviderDefaults);
@@ -2605,6 +3340,12 @@ function applyRetrievalProviderDefaults(kind) {
   const defaults = retrievalProviderDefaults[select.value] || retrievalProviderDefaults.custom;
   modelInputElement.value = isReranker ? defaults.rerankerModel : defaults.embeddingModel;
   baseUrlInputElement.value = isReranker ? (defaults.rerankerBaseUrl || defaults.baseUrl) : (defaults.embeddingBaseUrl || defaults.baseUrl);
+  const custom = select.value === "custom";
+  baseUrlInputElement.readOnly = !custom;
+  baseUrlInputElement.setAttribute("aria-readonly", custom ? "false" : "true");
+  baseUrlInputElement.title = custom
+    ? "Custom endpoints are session-only and validated server-side before use."
+    : "Known providers use a trusted fixed endpoint; choose Custom to enter another URL.";
 }
 
 if (retrievalEmbeddingProviderSelect) {
@@ -2612,6 +3353,26 @@ if (retrievalEmbeddingProviderSelect) {
 }
 if (retrievalRerankerProviderSelect) {
   retrievalRerankerProviderSelect.addEventListener("change", () => applyRetrievalProviderDefaults("reranker"));
+}
+
+
+if (fetchModelsBtn) {
+  fetchModelsBtn.addEventListener("click", handleFetchModels);
+}
+
+
+if (form) {
+  form.addEventListener("change", (e) => {
+    if (e.target && e.target.id === "question") return;
+    saveUserConfigToLocal();
+  });
+  form.addEventListener("input", (e) => {
+    if (e.target && e.target.id === "question") return;
+    saveUserConfigToLocal();
+  });
+}
+if (resetConfigBtn) {
+  resetConfigBtn.addEventListener("click", handleResetConfig);
 }
 
 if (stopButton) {
@@ -2822,6 +3583,28 @@ if (clearDisciplinesButton) {
   });
 }
 
+if (modePillFederated) {
+  modePillFederated.addEventListener("click", () => setWorkspaceMode("federated"));
+}
+if (modePillSingle) {
+  modePillSingle.addEventListener("click", () => setWorkspaceMode("single"));
+}
+document.querySelectorAll(".profile-chip").forEach((chip) => {
+  chip.addEventListener("click", () => setFederatedProfile(chip.dataset.profile));
+});
+if (federatedProfileSelect) {
+  federatedProfileSelect.addEventListener("change", (e) => setFederatedProfile(e.target.value));
+}
+if (targetScaleSelect) {
+  targetScaleSelect.addEventListener("change", (e) => {
+    const count = Number(e.target.value);
+    const targetMaxInput = document.getElementById("targetMax");
+    const targetMinInput = document.getElementById("targetMin");
+    if (targetMaxInput) targetMaxInput.value = count;
+    if (targetMinInput) targetMinInput.value = Math.min(5, count);
+  });
+}
+
 dataSourceSelect.addEventListener("change", () => {
   updateSourceFields();
   updateSourceFilterUi({ reset: true });
@@ -2907,6 +3690,7 @@ async function initializeApp() {
   applyRetrievalProviderDefaults("embedding");
   applyRetrievalProviderDefaults("reranker");
   await loadDisciplineOptions();
+  await loadEgressOptions();
   await loadServerDefaults();
   updateSourceSummary();
   updateExportButtons();

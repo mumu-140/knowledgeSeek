@@ -1,14 +1,18 @@
+import re
+import tempfile
+from pathlib import Path
+from paperseek.providers import PaperAuthor, PaperCitation, PaperIdentifiers, PaperLinks, PaperNames, PaperRecord, PaperSource
 import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from paperseek.web_app import app
-from paperseek.web_app import SearchRequest, _config_from_payload
+from paperseek.web_app import DiagnosticRequest, SearchRequest, _config_from_payload
 from tests.helpers import CONFIG_ENV_KEYS, temporary_env
 
 
-SOURCE_IDS = ["openalex", "arxiv", "semanticscholar", "pubmed", "googlescholar", "paperhub", "crossref", "wos"]
+SOURCE_IDS = ["openalex", "arxiv", "semanticscholar", "pubmed", "googlescholar", "paperhub", "crossref", "federated", "wos"]
 
 
 class WebAppTest(unittest.TestCase):
@@ -189,6 +193,589 @@ class WebAppTest(unittest.TestCase):
             self.assertTrue(payload["has_openalex_api_key"])
             self.assertNotIn("sk-env-test", response.text)
             self.assertNotIn("oa-env-test", response.text)
+
+
+    def test_sources_endpoint_includes_federated_source(self):
+        response = self.client.get("/api/sources")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        sources_map = {item["id"]: item for item in payload["sources"]}
+        self.assertIn("federated", sources_map)
+        fed = sources_map["federated"]
+        self.assertIn("federated_profile", fed.get("supported_parameters", []))
+        self.assertIn("federated_max_per_source", fed.get("supported_parameters", []))
+
+    def test_config_defaults_hides_server_managed_custom_base_url(self):
+        with temporary_env({
+            "LLM_PROVIDER": "custom",
+            "LLM_API_TYPE": "openai_chat",
+            "LLM_MODEL": "private-model",
+            "LLM_BASE_URL": "https://private-gateway.example/v1",
+            "LLM_API_KEY": "sk-test",
+        }, clear=CONFIG_ENV_KEYS):
+            response = self.client.get("/api/config/defaults")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["llm_provider"], "custom")
+        self.assertEqual(payload["llm_base_url"], "")
+        self.assertTrue(payload["has_llm_base_url"])
+        self.assertNotIn("private-gateway.example", response.text)
+
+    def test_network_egress_endpoint_never_exposes_proxy_urls(self):
+        env = {
+            "PROXY_POOL": "main,backup",
+            "PROXY_MAIN_URL": "http://proxy-main.example:8080",
+            "PROXY_MAIN_LABEL": "Main Proxy",
+            "PROXY_BACKUP_URL": "http://proxy-backup.example:8080",
+        }
+        with temporary_env(env, clear=tuple(env)):
+            response = self.client.get("/api/network/egress")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual([item["id"] for item in payload["proxies"]], ["main", "backup"])
+        self.assertEqual(payload["default_proxy_ids"], ["main", "backup"])
+        self.assertIn("Main Proxy", response.text)
+        self.assertNotIn("proxy-main.example", response.text)
+        self.assertNotIn("proxy-backup.example", response.text)
+
+    def test_config_defaults_includes_federated_settings(self):
+        response = self.client.get("/api/config/defaults")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("federated_profile", payload)
+        self.assertIn("federated_max_per_source", payload)
+        self.assertIn(payload["federated_profile"], ("biomed", "cs", "general"))
+        self.assertGreaterEqual(payload["federated_max_per_source"], 1)
+
+    def test_config_from_payload_with_federated_profiles(self):
+        for profile in ("biomed", "cs", "general"):
+            payload = SearchRequest(
+                question="immune checkpoint inhibitors",
+                data_source="federated",
+                federated_profile=profile,
+                federated_max_per_source=30,
+            )
+            config = _config_from_payload(payload)
+            self.assertEqual(config.data_source, "federated")
+            self.assertEqual(config.federated_profile, profile)
+            self.assertEqual(config.federated_max_per_source, 30)
+
+    def test_search_federated_successful_multi_source_and_provenance(self):
+        record = PaperRecord(
+            uid="mosaic:sample-1",
+            title="CRISPR gene editing in mammalian cells",
+            types=["article"],
+            source=PaperSource(source_title="Nature", publish_year=2024),
+            names=PaperNames(authors=[PaperAuthor(display_name="Jennifer Doudna")]),
+            links=PaperLinks(record="https://nature.com/example", pdf="https://nature.com/example.pdf"),
+            citations=[PaperCitation(db="MultiSource", count=120)],
+            identifiers=PaperIdentifiers(doi="10.1038/sample1"),
+            abstract="Study on gene editing techniques.",
+            provider="federated",
+            raw={
+                "mosaic_sources": ["PubMed", "OpenAlex", "Crossref"],
+                "mosaic_source": "PubMed",
+            },
+        )
+        fake_stats = {
+            "raw_total": 75,
+            "unique": 60,
+            "merged": 15,
+            "per_source": {"PubMed": 25, "Europe PMC": 25, "Crossref": 25},
+            "errors": {},
+        }
+        fake_steps = [
+            {"step": "retrieval", "count": 60},
+            {"step": "rrf", "count": 60},
+            {"step": "embedding", "count": 60},
+            {"step": "reranker", "count": 30, "skipped": True},
+            {"step": "llm", "count": 10},
+        ]
+
+        class FakeFederatedAgent:
+            def __init__(self, config, llm):
+                self.config = config
+                self.llm = llm
+
+            def search(self, question, verbose=False, event_handler=None):
+                return {
+                    "question": question,
+                    "source": "federated",
+                    "final_query": "CRISPR gene editing",
+                    "db": "FEDERATED",
+                    "field": "",
+                    "total": 60,
+                    "iterations": 1,
+                    "history": [],
+                    "citation_map": {},
+                    "federated_stats": fake_stats,
+                    "ranking_steps": fake_steps,
+                    "ranked": [
+                        {
+                            "document": record,
+                            "score": 9.5,
+                            "reasoning": "Direct match for CRISPR mechanisms.",
+                            "retrieval_lanes": ["dense", "bm25"],
+                        }
+                    ],
+                }
+
+        with patch("paperseek.web_app.create_llm_client", return_value=object()), patch(
+            "paperseek.web_app.PaperSeekAgent", FakeFederatedAgent
+        ):
+            response = self.client.post(
+                "/api/search",
+                json={
+                    "question": "CRISPR gene editing",
+                    "data_source": "federated",
+                    "federated_profile": "biomed",
+                    "federated_max_per_source": 25,
+                    "llm_provider": "ollama",
+                    "llm_api_type": "openai_chat",
+                    "target_min": 5,
+                    "target_max": 20,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["source"], "federated")
+        self.assertEqual(data["federated_stats"]["raw_total"], 75)
+        self.assertEqual(data["federated_stats"]["unique"], 60)
+        self.assertEqual(data["federated_stats"]["merged"], 15)
+        self.assertEqual(data["federated_stats"]["per_source"]["PubMed"], 25)
+        self.assertEqual(len(data["ranked"]), 1)
+        paper = data["ranked"][0]
+        self.assertEqual(paper["mosaic_sources"], ["PubMed", "OpenAlex", "Crossref"])
+        self.assertEqual(paper["mosaic_source"], "PubMed")
+        self.assertEqual(paper["relevance_reason"], "Direct match for CRISPR mechanisms.")
+        self.assertEqual(data["ranking_steps"], fake_steps)
+
+    def test_search_federated_partial_source_failure_and_429(self):
+        fake_stats = {
+            "raw_total": 45,
+            "unique": 40,
+            "merged": 5,
+            "per_source": {"PubMed": 25, "Europe PMC": 20, "Semantic Scholar": 0, "bioRxiv": 0},
+            "errors": {
+                "Semantic Scholar": "Rate limited (429)",
+                "bioRxiv": "No papers found",
+            },
+        }
+
+        class FakePartialAgent:
+            def __init__(self, config, llm):
+                self.config = config
+                self.llm = llm
+
+            def search(self, question, verbose=False, event_handler=None):
+                return {
+                    "question": question,
+                    "source": "federated",
+                    "final_query": "cancer immunotherapy",
+                    "db": "FEDERATED",
+                    "field": "",
+                    "total": 40,
+                    "iterations": 1,
+                    "history": [],
+                    "citation_map": {},
+                    "federated_stats": fake_stats,
+                    "ranked": [],
+                }
+
+        with patch("paperseek.web_app.create_llm_client", return_value=object()), patch(
+            "paperseek.web_app.PaperSeekAgent", FakePartialAgent
+        ):
+            response = self.client.post(
+                "/api/search",
+                json={
+                    "question": "cancer immunotherapy",
+                    "data_source": "federated",
+                    "federated_profile": "biomed",
+                    "llm_provider": "ollama",
+                    "llm_api_type": "openai_chat",
+                    "target_min": 0,
+                    "target_max": 20,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["federated_stats"]["errors"]["Semantic Scholar"], "Rate limited (429)")
+        self.assertEqual(data["federated_stats"]["errors"]["bioRxiv"], "No papers found")
+        self.assertEqual(data["federated_stats"]["per_source"]["Semantic Scholar"], 0)
+
+    def test_search_federated_zero_result_source(self):
+        fake_stats = {
+            "raw_total": 10,
+            "unique": 10,
+            "merged": 0,
+            "per_source": {"arXiv": 10, "DBLP": 0},
+            "errors": {},
+        }
+
+        class FakeZeroSourceAgent:
+            def __init__(self, config, llm):
+                self.config = config
+                self.llm = llm
+
+            def search(self, question, verbose=False, event_handler=None):
+                return {
+                    "question": question,
+                    "source": "federated",
+                    "final_query": "quantum gravity",
+                    "db": "FEDERATED",
+                    "field": "",
+                    "total": 10,
+                    "iterations": 1,
+                    "history": [],
+                    "citation_map": {},
+                    "federated_stats": fake_stats,
+                    "ranked": [],
+                }
+
+        with patch("paperseek.web_app.create_llm_client", return_value=object()), patch(
+            "paperseek.web_app.PaperSeekAgent", FakeZeroSourceAgent
+        ):
+            response = self.client.post(
+                "/api/search",
+                json={
+                    "question": "quantum gravity",
+                    "data_source": "federated",
+                    "federated_profile": "cs",
+                    "llm_provider": "ollama",
+                    "llm_api_type": "openai_chat",
+                    "target_min": 0,
+                    "target_max": 10,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["federated_stats"]["per_source"]["DBLP"], 0)
+        self.assertEqual(data["federated_stats"]["unique"], 10)
+
+
+    def test_llm_models_get_returns_presets(self):
+        response = self.client.get("/api/llm/models?provider=deepseek")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["provider"], "deepseek")
+        self.assertEqual(data["source"], "preset")
+        self.assertIn("deepseek-chat", data["models"])
+        self.assertIn("deepseek-reasoner", data["models"])
+
+    def test_config_defaults_never_returns_secret_values(self):
+        """/api/config/defaults must never echo API key values back to the client."""
+        secrets = {
+            "LLM_API_KEY": "sk-test",
+            "OPENALEX_API_KEY": "oa-test-secret",
+            "WOS_API_KEY": "wos-test-secret",
+            "SEMANTIC_SCHOLAR_API_KEY": "ss-test-secret",
+            "PUBMED_API_KEY": "pubmed-test-secret",
+            "SERPER_API_KEY": "serper-test-secret",
+        }
+        with temporary_env(secrets, clear=CONFIG_ENV_KEYS):
+            response = self.client.get("/api/config/defaults")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        for secret in secrets.values():
+            self.assertNotIn(secret, response.text)
+        # Secrets surface only as has_* booleans.
+        self.assertTrue(payload["has_llm_api_key"])
+        self.assertTrue(payload["has_openalex_api_key"])
+        self.assertTrue(payload["has_wos_api_key"])
+        for key in payload:
+            self.assertFalse(key.endswith("_api_key") and not key.startswith("has_"),
+                             f"raw secret field exposed: {key}")
+
+    def test_config_save_endpoint_is_not_public(self):
+        """POST /api/config/save was removed; it must not write server config."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            with temporary_env(
+                {"PAPERSEEK_CONFIG_FILE": str(config_path)},
+                clear=CONFIG_ENV_KEYS,
+            ):
+                response = self.client.post(
+                    "/api/config/save",
+                    json={"settings": {"LLM_PROVIDER": "deepseek", "LLM_MODEL": "deepseek-chat"}},
+                )
+                self.assertIn(response.status_code, (404, 405))
+                self.assertFalse(config_path.exists())
+
+    def test_remote_model_discovery_rejects_unsafe_custom_url_before_network(self):
+        """Unsafe Custom endpoints are rejected before model discovery can perform I/O."""
+        with patch("paperseek.web_app.fetch_remote_models") as fetch_models:
+            response = self.client.post(
+                "/api/llm/models",
+                json={
+                    "provider": "custom",
+                    "base_url": "http://169.254.169.254/latest/meta-data/",
+                    "api_key": "sk-test",
+                },
+            )
+            self.assertEqual(response.status_code, 400)
+            fetch_models.assert_not_called()
+        response = self.client.get("/api/llm/models?provider=openai")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["source"], "preset")
+
+    def test_remote_model_discovery_supports_validated_custom_endpoint(self):
+        from paperseek_core.network.url_policy import ValidatedEndpoint
+        safe = ValidatedEndpoint(
+            url="https://llm.example.com/v1",
+            host="llm.example.com",
+            port=443,
+            addresses=("93.184.216.34",),
+        )
+        with patch("paperseek.web_app.validate_outbound_url", return_value=safe), \
+             patch("paperseek.web_app.fetch_remote_models", return_value=(["model-a", "model-b"], "")) as fetch_models:
+            response = self.client.post(
+                "/api/llm/models",
+                json={
+                    "provider": "custom",
+                    "base_url": safe.url,
+                    "api_key": "sk-test",
+                    "egress_mode": "direct",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["models"], ["model-a", "model-b"])
+        self.assertEqual(response.json()["source"], "remote")
+        self.assertEqual(fetch_models.call_args.kwargs["base_url"], safe.url)
+
+    # SSRF hardening: the outbound base URLs the server dials (LLM, embedding, reranker)
+    # must come from trusted server env/config only. A client payload must never be able to
+    # steer them at cloud metadata (169.254.169.254), localhost, or RFC1918 internal ranges.
+    # _config_from_payload is the sole producer of the AgentConfig used for those outbound
+    # requests, so proving the malicious value never lands on the config proves it never
+    # becomes the runtime outbound URL.
+    SSRF_URLS = (
+        "http://127.0.0.1:9000/v1",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.1/internal",
+        "http://172.16.0.5/v1",
+        "http://192.168.1.1/admin",
+    )
+
+    def test_search_config_ignores_client_supplied_llm_base_url(self):
+        """A client-supplied llm_base_url must not become the outbound LLM URL."""
+        trusted = "https://api.deepseek.com"
+        for url in self.SSRF_URLS:
+            with self.subTest(url=url), temporary_env({
+                "LLM_PROVIDER": "deepseek",
+                "LLM_API_TYPE": "openai_chat",
+                "LLM_MODEL": "deepseek-test",
+                "LLM_BASE_URL": trusted,
+                "LLM_API_KEY": "sk-test",
+            }, clear=CONFIG_ENV_KEYS):
+                # Provider unchanged: the trusted env base URL must be retained verbatim.
+                payload = SearchRequest(question="q", llm_provider="", llm_base_url=url)
+                config = _config_from_payload(payload)
+                self.assertEqual(config.llm_base_url, trusted)
+                self.assertNotEqual(config.llm_base_url, url)
+
+    def test_custom_provider_accepts_only_validated_session_base_url(self):
+        from paperseek_core.network.url_policy import ValidatedEndpoint
+        safe = ValidatedEndpoint(
+            url="https://llm.example.com/v1",
+            host="llm.example.com",
+            port=443,
+            addresses=("93.184.216.34",),
+        )
+        with patch("paperseek.web_app.validate_outbound_url", return_value=safe), temporary_env({
+            "LLM_PROVIDER": "openai",
+            "LLM_BASE_URL": "https://api.openai.com/v1",
+        }, clear=CONFIG_ENV_KEYS):
+            payload = SearchRequest(
+                question="q",
+                llm_provider="custom",
+                llm_api_type="openai_chat",
+                llm_model="model-a",
+                llm_base_url=safe.url,
+            )
+            config = _config_from_payload(payload)
+        self.assertEqual(config.llm_provider, "custom")
+        self.assertEqual(config.llm_base_url, safe.url)
+
+    def test_search_config_uses_provider_default_not_client_base_url_on_switch(self):
+        """Switching provider must fall back to the trusted provider default, never the client URL."""
+        for url in self.SSRF_URLS:
+            with self.subTest(url=url), temporary_env({
+                "LLM_PROVIDER": "deepseek",
+                "LLM_API_TYPE": "openai_chat",
+                "LLM_BASE_URL": "https://api.deepseek.com",
+            }, clear=CONFIG_ENV_KEYS):
+                payload = SearchRequest(
+                    question="q",
+                    llm_provider="openai",
+                    llm_api_type="openai_chat",
+                    llm_base_url=url,
+                )
+                config = _config_from_payload(payload)
+                self.assertNotEqual(config.llm_base_url, url)
+                # It resolves to a server-known provider default, not anything client-supplied.
+                self.assertTrue(config.llm_base_url.startswith("https://"))
+                self.assertNotIn("127.0.0.1", config.llm_base_url)
+                self.assertNotIn("169.254.169.254", config.llm_base_url)
+
+    def test_search_config_ignores_client_supplied_retrieval_base_urls(self):
+        """Client embedding/reranker base URLs must not become outbound URLs."""
+        embed_trusted = "https://embeddings.internal.example/v1"
+        rerank_trusted = "https://rerank.internal.example/v1"
+        for url in self.SSRF_URLS:
+            with self.subTest(url=url), temporary_env({
+                "RETRIEVAL_EMBEDDING_BASE_URL": embed_trusted,
+                "RETRIEVAL_RERANKER_BASE_URL": rerank_trusted,
+            }, clear=CONFIG_ENV_KEYS + ("RETRIEVAL_EMBEDDING_BASE_URL", "RETRIEVAL_RERANKER_BASE_URL")):
+                payload = SearchRequest(
+                    question="q",
+                    retrieval_embedding_base_url=url,
+                    retrieval_reranker_base_url=url,
+                )
+                config = _config_from_payload(payload)
+                self.assertEqual(config.retrieval_embedding_base_url, embed_trusted)
+                self.assertEqual(config.retrieval_reranker_base_url, rerank_trusted)
+                self.assertNotEqual(config.retrieval_embedding_base_url, url)
+                self.assertNotEqual(config.retrieval_reranker_base_url, url)
+
+    def test_custom_retrieval_base_urls_accept_only_validated_session_urls(self):
+        from paperseek_core.network.url_policy import ValidatedEndpoint
+        safe = ValidatedEndpoint(
+            url="https://ranking.example.com/v1",
+            host="ranking.example.com",
+            port=443,
+            addresses=("93.184.216.34",),
+        )
+        with patch("paperseek.web_app.validate_outbound_url", return_value=safe):
+            payload = SearchRequest(
+                question="q",
+                retrieval_embedding_provider="custom",
+                retrieval_embedding_base_url=safe.url,
+                retrieval_reranker_provider="custom",
+                retrieval_reranker_base_url=safe.url,
+            )
+            config = _config_from_payload(payload)
+        self.assertEqual(config.retrieval_embedding_base_url, safe.url)
+        self.assertEqual(config.retrieval_reranker_base_url, safe.url)
+
+    def test_custom_retrieval_private_base_url_is_rejected_with_http_400(self):
+        response = self.client.post(
+            "/api/search",
+            json={
+                "question": "q",
+                "llm_provider": "ollama",
+                "llm_api_type": "openai_chat",
+                "retrieval_embedding_provider": "custom",
+                "retrieval_embedding_base_url": "http://169.254.169.254/latest/meta-data/",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Custom endpoint", response.json()["detail"])
+
+    def test_custom_llm_private_base_url_is_rejected_with_http_400(self):
+        response = self.client.post(
+            "/api/search",
+            json={
+                "question": "q",
+                "llm_provider": "custom",
+                "llm_api_type": "openai_chat",
+                "llm_model": "model-a",
+                "llm_api_key": "sk-test",
+                "llm_base_url": "http://169.254.169.254/latest/meta-data/",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Custom endpoint", response.json()["detail"])
+
+    def test_retrieval_base_urls_stay_empty_when_env_unset(self):
+        """With no server-side base URL configured, a client value must not fill the gap."""
+        for url in self.SSRF_URLS:
+            with self.subTest(url=url), temporary_env({}, clear=CONFIG_ENV_KEYS + (
+                "RETRIEVAL_EMBEDDING_BASE_URL", "RETRIEVAL_RERANKER_BASE_URL",
+            )):
+                payload = SearchRequest(
+                    question="q",
+                    retrieval_embedding_base_url=url,
+                    retrieval_reranker_base_url=url,
+                )
+                config = _config_from_payload(payload)
+                self.assertEqual(config.retrieval_embedding_base_url, "")
+                self.assertEqual(config.retrieval_reranker_base_url, "")
+
+    def test_diagnostics_config_ignores_client_supplied_base_urls(self):
+        """DiagnosticRequest must be hardened identically to SearchRequest."""
+        embed_trusted = "https://embeddings.internal.example/v1"
+        rerank_trusted = "https://rerank.internal.example/v1"
+        llm_trusted = "https://api.deepseek.com"
+        for url in self.SSRF_URLS:
+            with self.subTest(url=url), temporary_env({
+                "LLM_PROVIDER": "deepseek",
+                "LLM_API_TYPE": "openai_chat",
+                "LLM_MODEL": "deepseek-test",
+                "LLM_BASE_URL": llm_trusted,
+                "RETRIEVAL_EMBEDDING_BASE_URL": embed_trusted,
+                "RETRIEVAL_RERANKER_BASE_URL": rerank_trusted,
+            }, clear=CONFIG_ENV_KEYS + ("RETRIEVAL_EMBEDDING_BASE_URL", "RETRIEVAL_RERANKER_BASE_URL")):
+                payload = DiagnosticRequest(
+                    question="q",
+                    llm_provider="",
+                    llm_base_url=url,
+                    retrieval_embedding_base_url=url,
+                    retrieval_reranker_base_url=url,
+                )
+                config = _config_from_payload(payload)
+                self.assertEqual(config.llm_base_url, llm_trusted)
+                self.assertEqual(config.retrieval_embedding_base_url, embed_trusted)
+                self.assertEqual(config.retrieval_reranker_base_url, rerank_trusted)
+                for value in (config.llm_base_url, config.retrieval_embedding_base_url,
+                              config.retrieval_reranker_base_url):
+                    self.assertNotEqual(value, url)
+
+    def test_browser_persistence_excludes_secret_fields(self):
+        """app.js must persist only the allowlisted non-secret preference keys."""
+        app_js = Path(__file__).resolve().parent.parent / "paperseek" / "static" / "app.js"
+        source = app_js.read_text(encoding="utf-8")
+        allowlist_match = re.search(r"PERSISTED_CONFIG_KEYS\s*=\s*\[(.*?)\]", source, re.DOTALL)
+        self.assertIsNotNone(allowlist_match, "PERSISTED_CONFIG_KEYS allowlist missing from app.js")
+        allowlist = re.findall(r'"([a-z0-9_]+)"', allowlist_match.group(1))
+        self.assertTrue(allowlist, "PERSISTED_CONFIG_KEYS allowlist is empty")
+        forbidden = {"llm_api_key", "llm_base_url", "wos_api_key", "openalex_api_key", "openalex_email",
+                     "crossref_email", "semantic_scholar_api_key", "pubmed_api_key", "pubmed_email",
+                     "pubmed_tool", "serper_api_key", "retrieval_embedding_api_key",
+                     "retrieval_embedding_base_url", "retrieval_reranker_api_key",
+                     "retrieval_reranker_base_url"}
+        for key in allowlist:
+            self.assertNotIn(key, forbidden, f"secret-ish field persisted in browser: {key}")
+            self.assertFalse(
+                "api_key" in key or "token" in key or "secret" in key or "password" in key,
+                f"credential-like field persisted: {key}",
+            )
+        # saveUserConfigToLocal must route through the allowlist filter.
+        self.assertIn("pickPersistableConfig(config)", source)
+        self.assertIn('providerSelect.value === "custom"', source)
+        self.assertIn("baseUrlInput.readOnly = !custom", source)
+        self.assertIn("baseUrlInputElement.readOnly = !custom", source)
+
+    def test_legacy_browser_secret_fields_are_not_restored(self):
+        """restoreUserConfigFromLocal must purge legacy secret keys from stored state."""
+        app_js = Path(__file__).resolve().parent.parent / "paperseek" / "static" / "app.js"
+        source = app_js.read_text(encoding="utf-8")
+        legacy_match = re.search(r"LEGACY_SENSITIVE_CONFIG_KEYS\s*=\s*\[(.*?)\]", source, re.DOTALL)
+        self.assertIsNotNone(legacy_match, "LEGACY_SENSITIVE_CONFIG_KEYS missing from app.js")
+        legacy_keys = re.findall(r'"([a-z0-9_]+)"', legacy_match.group(1))
+        for required in ("llm_api_key", "wos_api_key", "serper_api_key", "retrieval_embedding_api_key"):
+            self.assertIn(required, legacy_keys, f"legacy purge list missing {required}")
+        # restore must strip unknown fields and never set secret inputs from storage.
+        restore_match = re.search(
+            r"function restoreUserConfigFromLocal\(\)\s*\{(.*?)\n\}", source, re.DOTALL
+        )
+        self.assertIsNotNone(restore_match, "restoreUserConfigFromLocal missing from app.js")
+        restore_body = restore_match.group(1)
+        self.assertIn("hadDisallowedFields", restore_body)
+        for secret_input in ('setVal("llmApiKey"', 'setVal("wosApiKey"', 'setVal("serperApiKey"'):
+            self.assertNotIn(secret_input, restore_body, f"restore writes secret input {secret_input}")
 
 
 if __name__ == "__main__":

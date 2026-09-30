@@ -356,6 +356,7 @@ paperseek search "open innovation and digital platforms" --source openalex
 | 计算机顶会 | 支持 | 不需要 | ICLR、ICML、NeurIPS、AAAI、NDSS 等计算机顶会论文 | 面向计算机顶会论文发现，不需要数据源 Key。 |
 | Crossref | 支持 | 通常不需要 | DOI、出版元数据、期刊和出版社信息校验 | DOI 与出版元数据注册库，适合题录校验和 DOI 补全。 |
 | Web of Science Starter | 适配中 | 必需 | 已有 Clarivate API 权限的机构用户 | 商业数据库 API，返回字段和可用性取决于订阅计划与机构授权。 |
+| Federated 多源（MOSAIC） | 可选依赖 | 不需要 | 一次查询扇出到多源、扩大候选池 | 通过可选的 MOSAIC 库合并 PubMed/Europe PMC/OpenAlex/Semantic Scholar/arXiv/DBLP/Crossref/DOAJ 等源；需 Python ≥ 3.11 并安装 `pip install "paperseek[federated]"`；排序仍由 PaperSeek 的 RRF/reranker/LLM 完成。 |
 
 ## LLM 服务商
 

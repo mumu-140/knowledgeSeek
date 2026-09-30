@@ -80,6 +80,23 @@ class HistoryStoreTest(unittest.TestCase):
             self.assertTrue(store.delete_run(run_id))
             self.assertEqual(store.list_runs(), [])
 
+    def test_safe_search_params_never_persist_full_custom_endpoint(self):
+        config = AgentConfig(
+            llm_provider="custom",
+            llm_api_type="openai_chat",
+            llm_model="private-model",
+            llm_base_url="https://gateway.example.com/private/v1",
+            egress_mode="pool",
+            egress_proxy_ids=("main", "backup"),
+        )
+        params = safe_search_params_from_config(config)
+        self.assertNotIn("llm_base_url", params)
+        self.assertEqual(params["llm_endpoint_host"], "gateway.example.com")
+        self.assertTrue(params["has_custom_endpoint"])
+        self.assertEqual(params["egress_mode"], "pool")
+        self.assertEqual(params["egress_proxy_ids"], ["main", "backup"])
+        self.assertNotIn("/private/v1", json.dumps(params))
+
     def test_store_defaults_to_shanghai_timezone_for_timestamps(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = HistoryStore(db_path=Path(tmp) / "paperseek.db", enabled=True)

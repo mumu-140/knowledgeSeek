@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import json
 import logging
 from queue import Empty, Queue
 import re
 import time
 from threading import Thread
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
@@ -17,7 +18,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from paperseek.client import ApiException
-from paperseek.config import AgentConfig, default_api_type, default_base_url, default_model
+from paperseek.config import (
+    AgentConfig,
+    SUPPORTED_EGRESS_MODES,
+    default_api_type,
+    default_base_url,
+    default_model,
+    preset_models,
+)
 from paperseek.diagnostics import run_doctor, smoke_source
 from paperseek.disciplines import (
     list_discipline_fields,
@@ -27,11 +35,13 @@ from paperseek.disciplines import (
     source_filter_mode,
 )
 from paperseek.env_loader import load_env_file
+from paperseek.config_store import load_user_config_into_env
 from paperseek.history import HistoryStore, result_payload_from_search_result, safe_search_params_from_config
-from paperseek.llm_client import LLMError, create_llm_client
+from paperseek.llm_client import LLMError, create_llm_client, fetch_remote_models
 from paperseek.providers import ProviderError
 from paperseek.search_agent import PaperSeekAgent
 from paperseek.source_metadata import list_source_metadata, supported_source_ids
+from paperseek_core.network import EgressRouter, EndpointPolicyError, proxy_metadata, validate_outbound_url
 
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -39,6 +49,7 @@ STREAM_HEARTBEAT_SECONDS = 10.0
 STREAM_HEARTBEAT_PADDING = " " * 2048
 
 load_env_file()
+load_user_config_into_env()
 
 app = FastAPI(title="PaperSeek", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -57,6 +68,8 @@ FIELD_LABELS = {
     "pubmed_email": "PubMed Email",
     "pubmed_tool": "PubMed Tool",
     "serper_api_key": "Serper API Key",
+    "federated_profile": "Federated Profile",
+    "federated_max_per_source": "Federated Max Per Source",
     "llm_api_key": "LLM API Key",
     "llm_api_type": "LLM API Type",
     "discipline_fields": "Discipline Fields",
@@ -79,12 +92,18 @@ class SearchRequest(BaseModel):
     pubmed_email: Optional[str] = ""
     pubmed_tool: Optional[str] = ""
     serper_api_key: Optional[str] = ""
+    federated_profile: Optional[str] = ""
+    federated_max_per_source: Optional[int] = None
     llm_api_key: Optional[str] = ""
     llm_provider: str = ""
     llm_api_type: str = ""
     llm_model: Optional[str] = None
+    # Known providers ignore client base URLs. Custom endpoints are accepted only after
+    # server-side URL policy validation and are never persisted by the browser.
     llm_base_url: Optional[str] = None
     llm_max_tokens: Optional[int] = Field(default=None, ge=0, le=8192)
+    egress_mode: Optional[str] = ""
+    egress_proxy_ids: List[str] = Field(default_factory=list)
     wos_db: str = "WOS"
     search_field: Optional[str] = ""
     discipline_fields: List[str] = Field(default_factory=list)
@@ -101,11 +120,11 @@ class SearchRequest(BaseModel):
     retrieval_rrf_k: int = Field(default=60, ge=1, le=1000)
     retrieval_embedding_provider: Optional[str] = ""
     retrieval_embedding_model: Optional[str] = ""
-    retrieval_embedding_base_url: Optional[str] = ""
+    retrieval_embedding_base_url: Optional[str] = ""  # accepted-but-ignored (SSRF hardening)
     retrieval_embedding_api_key: Optional[str] = ""
     retrieval_reranker_provider: Optional[str] = ""
     retrieval_reranker_model: Optional[str] = ""
-    retrieval_reranker_base_url: Optional[str] = ""
+    retrieval_reranker_base_url: Optional[str] = ""  # accepted-but-ignored (SSRF hardening)
     retrieval_reranker_api_key: Optional[str] = ""
     retrieval_crossref_enrichment: bool = False
 
@@ -126,6 +145,23 @@ class SearchRequest(BaseModel):
     @classmethod
     def clean_api_type(cls, value: str) -> str:
         return (value or "").strip().lower()
+
+    @field_validator("egress_mode")
+    @classmethod
+    def clean_egress_mode(cls, value: str) -> str:
+        mode = (value or "").strip().lower()
+        if mode and mode not in SUPPORTED_EGRESS_MODES:
+            raise ValueError(f"must be one of {', '.join(SUPPORTED_EGRESS_MODES)}")
+        return mode
+
+    @field_validator("egress_proxy_ids", mode="before")
+    @classmethod
+    def clean_egress_proxy_ids(cls, value) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item).strip().lower() for item in value if str(item).strip()]
+        return [item.strip().lower() for item in str(value).split(",") if item.strip()]
 
     @field_validator("data_source")
     @classmethod
@@ -162,12 +198,18 @@ class DiagnosticRequest(BaseModel):
     pubmed_email: Optional[str] = ""
     pubmed_tool: Optional[str] = ""
     serper_api_key: Optional[str] = ""
+    federated_profile: Optional[str] = ""
+    federated_max_per_source: Optional[int] = None
     llm_api_key: Optional[str] = ""
     llm_provider: str = ""
     llm_api_type: str = ""
     llm_model: Optional[str] = None
+    # Known providers ignore client base URLs. Custom endpoints are accepted only after
+    # server-side URL policy validation and are never persisted by the browser.
     llm_base_url: Optional[str] = None
     llm_max_tokens: Optional[int] = Field(default=None, ge=0, le=8192)
+    egress_mode: Optional[str] = ""
+    egress_proxy_ids: List[str] = Field(default_factory=list)
     wos_db: str = "WOS"
     search_field: Optional[str] = ""
     discipline_fields: List[str] = Field(default_factory=list)
@@ -184,11 +226,11 @@ class DiagnosticRequest(BaseModel):
     retrieval_rrf_k: int = Field(default=60, ge=1, le=1000)
     retrieval_embedding_provider: Optional[str] = ""
     retrieval_embedding_model: Optional[str] = ""
-    retrieval_embedding_base_url: Optional[str] = ""
+    retrieval_embedding_base_url: Optional[str] = ""  # accepted-but-ignored (SSRF hardening)
     retrieval_embedding_api_key: Optional[str] = ""
     retrieval_reranker_provider: Optional[str] = ""
     retrieval_reranker_model: Optional[str] = ""
-    retrieval_reranker_base_url: Optional[str] = ""
+    retrieval_reranker_base_url: Optional[str] = ""  # accepted-but-ignored (SSRF hardening)
     retrieval_reranker_api_key: Optional[str] = ""
     retrieval_crossref_enrichment: bool = False
 
@@ -201,6 +243,23 @@ class DiagnosticRequest(BaseModel):
     @classmethod
     def clean_api_type(cls, value: str) -> str:
         return (value or "").strip().lower()
+
+    @field_validator("egress_mode")
+    @classmethod
+    def clean_egress_mode(cls, value: str) -> str:
+        mode = (value or "").strip().lower()
+        if mode and mode not in SUPPORTED_EGRESS_MODES:
+            raise ValueError(f"must be one of {', '.join(SUPPORTED_EGRESS_MODES)}")
+        return mode
+
+    @field_validator("egress_proxy_ids", mode="before")
+    @classmethod
+    def clean_egress_proxy_ids(cls, value) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item).strip().lower() for item in value if str(item).strip()]
+        return [item.strip().lower() for item in str(value).split(",") if item.strip()]
 
     @field_validator("data_source")
     @classmethod
@@ -223,6 +282,32 @@ class DiagnosticRequest(BaseModel):
     def normalize_filters_for_source(self):
         self.discipline_fields = list(normalize_source_filter_values(self.data_source, self.discipline_fields))
         return self
+
+
+class ModelDiscoveryRequest(BaseModel):
+    provider: str = "custom"
+    base_url: str = Field(min_length=1)
+    api_key: Optional[str] = ""
+    egress_mode: Optional[str] = ""
+    egress_proxy_ids: List[str] = Field(default_factory=list)
+
+    @field_validator("provider", "egress_mode")
+    @classmethod
+    def clean_lower(cls, value: str) -> str:
+        return (value or "").strip().lower()
+
+    @field_validator("egress_proxy_ids", mode="before")
+    @classmethod
+    def clean_proxy_ids(cls, value) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item).strip().lower() for item in value if str(item).strip()]
+        return [item.strip().lower() for item in str(value).split(",") if item.strip()]
+
+
+def _allow_insecure_custom_endpoints() -> bool:
+    return os.environ.get("ALLOW_INSECURE_CUSTOM_ENDPOINTS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @app.exception_handler(RequestValidationError)
@@ -321,10 +406,15 @@ def config_defaults():
     config = AgentConfig.from_env()
     return {
         "data_source": config.data_source,
+        "federated_profile": getattr(config, "federated_profile", "general"),
+        "federated_max_per_source": getattr(config, "federated_max_per_source", 25),
         "llm_provider": config.llm_provider,
         "llm_api_type": config.llm_api_type,
         "llm_model": config.llm_model,
-        "llm_base_url": config.llm_base_url,
+        # A server-managed Custom endpoint may be internal/sensitive. Never echo it.
+        # Known-provider defaults are public vendor endpoints and remain useful to the UI.
+        "llm_base_url": "" if config.llm_provider == "custom" else config.llm_base_url,
+        "has_llm_base_url": bool(config.llm_base_url),
         "llm_max_tokens": config.llm_max_tokens,
         "target_min": config.target_min,
         "target_max": config.target_max,
@@ -367,6 +457,8 @@ def _config_from_payload(payload: SearchRequest) -> AgentConfig:
     config.pubmed_email = payload.pubmed_email or getattr(config, "pubmed_email", "")
     config.pubmed_tool = payload.pubmed_tool or getattr(config, "pubmed_tool", "paperseek") or "paperseek"
     config.serper_api_key = payload.serper_api_key or getattr(config, "serper_api_key", "")
+    config.federated_profile = (payload.federated_profile or "").strip() or getattr(config, "federated_profile", "general")
+    config.federated_max_per_source = payload.federated_max_per_source or getattr(config, "federated_max_per_source", 25) or 25
     config.llm_api_key = payload.llm_api_key or config.llm_api_key
     config.llm_provider = payload_provider
     if payload.llm_api_type:
@@ -377,8 +469,20 @@ def _config_from_payload(payload: SearchRequest) -> AgentConfig:
         config.llm_model = payload.llm_model
     elif provider_changed or not config.llm_model:
         config.llm_model = default_model(config.llm_provider)
-    if payload.llm_base_url:
-        config.llm_base_url = payload.llm_base_url
+    # Known providers remain pinned to trusted server/default endpoints. Custom
+    # endpoints are session-scoped and must pass the outbound URL policy first.
+    if config.llm_provider == "custom":
+        if payload.llm_base_url:
+            try:
+                endpoint = validate_outbound_url(
+                    payload.llm_base_url,
+                    allow_http=_allow_insecure_custom_endpoints(),
+                )
+            except EndpointPolicyError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            config.llm_base_url = endpoint.url
+        elif provider_changed:
+            config.llm_base_url = ""
     elif provider_changed or not config.llm_base_url:
         config.llm_base_url = default_base_url(config.llm_provider, config.llm_api_type)
     if payload.llm_max_tokens is not None:
@@ -397,13 +501,33 @@ def _config_from_payload(payload: SearchRequest) -> AgentConfig:
     config.retrieval_rrf_k = payload.retrieval_rrf_k
     config.retrieval_embedding_provider = (payload.retrieval_embedding_provider or config.retrieval_embedding_provider or "local").strip().lower()
     config.retrieval_embedding_model = payload.retrieval_embedding_model or config.retrieval_embedding_model
-    config.retrieval_embedding_base_url = payload.retrieval_embedding_base_url or config.retrieval_embedding_base_url
+    if config.retrieval_embedding_provider == "custom" and payload.retrieval_embedding_base_url:
+        try:
+            endpoint = validate_outbound_url(
+                payload.retrieval_embedding_base_url,
+                allow_http=_allow_insecure_custom_endpoints(),
+            )
+        except EndpointPolicyError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        config.retrieval_embedding_base_url = endpoint.url
+    # Known retrieval providers remain server/default sourced; client URLs are ignored.
     config.retrieval_embedding_api_key = payload.retrieval_embedding_api_key or config.retrieval_embedding_api_key
     config.retrieval_reranker_provider = (payload.retrieval_reranker_provider or config.retrieval_reranker_provider or "").strip().lower()
     config.retrieval_reranker_model = payload.retrieval_reranker_model or config.retrieval_reranker_model
-    config.retrieval_reranker_base_url = payload.retrieval_reranker_base_url or config.retrieval_reranker_base_url
+    if config.retrieval_reranker_provider == "custom" and payload.retrieval_reranker_base_url:
+        try:
+            endpoint = validate_outbound_url(
+                payload.retrieval_reranker_base_url,
+                allow_http=_allow_insecure_custom_endpoints(),
+            )
+        except EndpointPolicyError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        config.retrieval_reranker_base_url = endpoint.url
+    # Known retrieval providers remain server/default sourced; client URLs are ignored.
     config.retrieval_reranker_api_key = payload.retrieval_reranker_api_key or config.retrieval_reranker_api_key
     config.retrieval_crossref_enrichment = payload.retrieval_crossref_enrichment
+    config.egress_mode = (payload.egress_mode or config.egress_mode or "auto").strip().lower()
+    config.egress_proxy_ids = tuple(payload.egress_proxy_ids or config.egress_proxy_ids or ())
     return config
 
 
@@ -472,6 +596,71 @@ def history_clear(confirm: bool = Query(default=False)):
         raise HTTPException(status_code=400, detail="Pass confirm=true to clear all local history.")
     store = HistoryStore()
     return {"deleted": store.clear()}
+
+
+
+@app.get("/api/llm/models")
+def list_llm_models(provider: str = Query(default="openai")):
+    prov = (provider or "openai").lower()
+    presets = preset_models(prov)
+    return {
+        "provider": prov,
+        "models": presets or ([default_model(prov)] if default_model(prov) else []),
+        "default": default_model(prov),
+        "source": "preset",
+        "count": len(presets),
+    }
+
+
+@app.post("/api/llm/models")
+def discover_llm_models(payload: ModelDiscoveryRequest):
+    if payload.provider != "custom":
+        raise HTTPException(status_code=400, detail="Remote model discovery is available only for Custom endpoints.")
+    if payload.egress_mode and payload.egress_mode not in SUPPORTED_EGRESS_MODES:
+        raise HTTPException(status_code=400, detail="Unsupported egress mode.")
+    try:
+        endpoint = validate_outbound_url(payload.base_url, allow_http=_allow_insecure_custom_endpoints())
+        router = EgressRouter(
+            mode=payload.egress_mode or None,
+            proxy_ids=payload.egress_proxy_ids,
+            protect_url=True,
+            allow_http_endpoint=_allow_insecure_custom_endpoints(),
+        )
+        models, error = fetch_remote_models(
+            "custom",
+            base_url=endpoint.url,
+            api_key=payload.api_key or "",
+            egress_router=router,
+        )
+    except (EndpointPolicyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not models:
+        raise HTTPException(status_code=502, detail=error or "Model discovery returned no models.")
+    return {
+        "provider": "custom",
+        "models": models,
+        "default": models[0],
+        "source": "remote",
+        "count": len(models),
+        "egress": router.last_route or "unknown",
+        "attempted_egress": list(router.attempted_routes),
+    }
+
+
+@app.get("/api/network/egress")
+def network_egress():
+    config = AgentConfig.from_env()
+    proxies = proxy_metadata()
+    default_proxy_ids = list(config.egress_proxy_ids)
+    if not default_proxy_ids and config.egress_mode != "direct":
+        default_proxy_ids = [str(item.get("id") or "") for item in proxies if item.get("id")]
+    return {
+        "modes": list(SUPPORTED_EGRESS_MODES),
+        "default_mode": config.egress_mode,
+        "default_proxy_ids": default_proxy_ids,
+        "proxies": proxies,
+    }
+
 
 
 @app.post("/api/search")

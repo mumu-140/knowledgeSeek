@@ -535,7 +535,7 @@ Web UI 运行时：
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `DATA_SOURCE` | `openalex` | 数据源：`openalex`、`arxiv`、`semanticscholar`、`pubmed`、`googlescholar`、`paperhub`、`crossref`、`wos`。 |
+| `DATA_SOURCE` | `openalex` | 数据源：`openalex`、`arxiv`、`semanticscholar`、`pubmed`、`googlescholar`、`paperhub`、`crossref`、`wos`、`federated`（需安装 `paperseek[federated]`，Python ≥ 3.11）。 |
 | `LLM_PROVIDER` | `openai` | LLM 服务商。 |
 | `LLM_API_TYPE` | 由 provider 决定 | `openai_chat`、`openai_responses`、`anthropic_messages`。 |
 | `LLM_MODEL` | 由 provider 决定 | 模型名称。 |
@@ -887,6 +887,7 @@ paperseek sources --json
 | 计算机顶会 | `paperhub` | 不需要 | 支持，取决于记录数据 | 不支持 | 不支持 | 不支持 |
 | Crossref | `crossref` | 通常不需要 | 取决于出版商元数据 | 支持，覆盖不稳定 | 不支持 | 不支持 |
 | Web of Science Starter | `wos` | 必需 | 不作为稳定字段依赖 | 支持，取决于权限 | 不支持 | 不支持 |
+| Federated 多源（MOSAIC） | `federated` | 不需要 | 支持 | 支持 | 不支持 | 支持，取决于记录 |
 
 ### OpenAlex
 
@@ -1033,6 +1034,51 @@ export WOS_DB=WOS
 
 WoS Starter 的字段、请求量和可用数据库取决于订阅计划与机构授权。遇到 `401` 时检查 key、HTTPS 和订阅权限。遇到 `512` 时，通常需要同时排查 Clarivate 服务状态和查询兼容性。
 
+### Federated 多源检索（MOSAIC）
+
+Federated 数据源通过可选的 MOSAIC 库把一次查询扇出到多个学术数据源，合并去重后进入 PaperSeek 现有的候选池融合与排序（RRF / reranker / LLM ranking）。适合：
+
+- 一次查询覆盖多个数据源，扩大候选池。
+- 跨学科查询（生命科学、计算机科学等）。
+- 单源结果不足时补充召回。
+
+要求 Python ≥ 3.11，并安装可选依赖：
+
+```bash
+pip install "paperseek[federated]"
+```
+
+未安装 MOSAIC 时选择 `federated` 会得到可操作的错误提示，不影响其他数据源。MOSAIC 不需要 API Key；缺少某个源 Key 的源会被自动跳过，单个源失败不会中断整个检索。
+
+启用方式（三选一）：
+
+```bash
+# 环境变量
+export DATA_SOURCE=federated
+export FEDERATED_PROFILE=biomed
+export FEDERATED_MAX_PER_SOURCE=25
+```
+
+```bash
+# CLI
+paperseek "CRISPR base editing off-target evaluation" \
+  --source federated \
+  --federated-profile biomed \
+  --federated-max-per-source 25
+```
+
+Web UI：在设置表单中配置 Federated Profile 与 Federated Max Per Source，选择 `federated` 数据源。
+
+Profile 与对应源：
+
+| Profile | 数据源 |
+| --- | --- |
+| `biomed` | PubMed、Europe PMC、PMC、OpenAlex、Semantic Scholar、bioRxiv/medRxiv、Crossref |
+| `cs` | OpenAlex、Semantic Scholar、arXiv、DBLP、Crossref |
+| `general` | OpenAlex、Semantic Scholar、Crossref、DOAJ |
+
+默认 profile 为 `general`，默认每源上限为 25。生命周期服务（Web of Science、NotebookLM）不在 federated 扇出范围内。
+
 ### 选择数据源
 
 | 需求 | 推荐数据源 |
@@ -1046,6 +1092,7 @@ WoS Starter 的字段、请求量和可用数据库取决于订阅计划与机�
 | 需要计算机顶会论文 | 计算机顶会 |
 | 需要 DOI 与出版元数据校验 | Crossref |
 | 机构要求使用 Web of Science | WoS Starter |
+| 一次查询覆盖多源、扩大候选池 | Federated 多源（MOSAIC） |
 | 希望尽量少配置 API Key | OpenAlex 匿名测试、arXiv、计算机顶会或 Crossref |
 | 需要较稳定的长期运行 | OpenAlex API Key + LLM Key |
 
@@ -1193,7 +1240,9 @@ paperseek search "responsible AI governance" --source openalex --json > results.
 | 参数 | 说明 |
 | --- | --- |
 | `question` | 自然语言研究问题。 |
-| `--source` | 数据源：`openalex`、`arxiv`、`semanticscholar`、`pubmed`、`googlescholar`、`paperhub`、`crossref`、`wos`。 |
+| `--source` | 数据源：`openalex`、`arxiv`、`semanticscholar`、`pubmed`、`googlescholar`、`paperhub`、`crossref`、`wos`、`federated`。 |
+| `--federated-profile` | Federated 数据源的扇出 profile：`biomed`、`cs`、`general`（默认 `general`）。 |
+| `--federated-max-per-source` | Federated 每源结果上限（默认 25）。 |
 | `--field`, `-f` | 学科或领域提示。 |
 | `--discipline`, `--discipline-field` | 所选数据源的原生过滤值；OpenAlex Field、WoS Category 或 arXiv Category 可用，可重复传入多个值。 |
 | `--db`, `-d` | WoS 数据库代码，例如 `WOS`。 |
@@ -1425,172 +1474,230 @@ Web UI 由四个页面组成：
 
 ### Search 页面
 
-Search 页面左侧是输入和配置，右侧是工作流和日志。
+Search 页面采用以科研探索工作流为核心的清晰架构：
+
+```text
+Research question
+    ↓
+Search configuration
+    ↓
+Retrieval progress & Federated source status
+    ↓
+Candidate merge & Ranking pipeline
+    ↓
+Final papers
+```
+
+默认界面保持极简与高信息密度，避免平铺冗余表单参数；所有高级配置按逻辑类别分层收纳，按需展开。
 
 #### Research Question
 
-输入研究问题。建议写成一到三句话，包含：
+核心视觉层置顶一个显眼的大输入框：
+**“What literature are you looking for?”**
 
+输入研究问题。建议写成一到三句话，包含：
 - 主题概念。
 - 研究对象。
 - 场景或领域。
 - 方法、理论或时间范围。
 
 示例：
-
 ```text
 Find empirical studies on how digital platforms influence open innovation in firms.
 ```
-
-中文也可以：
-
+中文同样支持：
 ```text
 查找数字平台如何影响企业开放式创新的实证研究。
 ```
 
-#### Discipline Fields
+#### Search Mode 与 Federated Search
 
-`Source Filter` 位于 Search 页面 Research Question 下方，默认显示 `Any filter`。它会随数据源变化：OpenAlex 显示 OpenAlex Field，WoS 显示 Web of Science Category，arXiv 显示 arXiv Category；没有可靠硬过滤的数据源显示 `Field/context hint` 输入框。
+输入框下方提供直观的检索模式切换：
+- **Federated Search（多源联合检索，powered by MOSAIC）**：推荐模式。自动跨多个权威数据库扇出检索，智能对齐去重，再由 KnowledgeSeek 统一融合重排。
+- **Single Source（单源检索）**：针对特定数据库（如 OpenAlex、arXiv、PubMed 等）进行单点精准检索。
 
-Web UI 会从 `/api/disciplines` 加载各数据源的过滤模式和选项，并把本次选择随请求提交给后端。环境变量 `DISCIPLINE_FIELDS` 设置的默认值会在页面加载时按当前 `DATA_SOURCE` 归一化；浏览器会话中的选择不会写回 `.env` 或用户级配置文件。
+当选择 **Federated Search** 时，可切换对应的专业 Profile：
 
-如果当前数据源没有可靠硬过滤，使用 `Field/context hint` 给 LLM 一个宽松领域提示；如果当前数据源支持原生过滤，使用对应的 Source Filter 收窄结果。
+| Profile | 面向领域 | 覆盖数据源 |
+| --- | --- | --- |
+| **Biomedical** | 生物医药与生命科学 | PubMed · Europe PMC · PMC · OpenAlex · Semantic Scholar · bioRxiv · Crossref |
+| **Computer Science** | 计算机科学与信息技术 | OpenAlex · Semantic Scholar · arXiv · DBLP · Crossref |
+| **General** | 通用学术多学科 | OpenAlex · Semantic Scholar · Crossref · DOAJ |
 
-#### Data Source
+并可直接调节 `Max per source`（每源最大候选抓取数，默认 25）。
 
-选择：
+#### 目标结果规模（Target Scale）
 
-- `OpenAlex (precise search)`
-- `arXiv (preprints)`
-- `Semantic Scholar (broad scholarly graph)`
-- `PubMed (biomedical literature)`
-- `Google Scholar (via Serper)`
-- `Computer science top conferences`
-- `Crossref (metadata / DOI registry)`
-- `Web of Science Starter`
+默认显示目标文献量设置：
+- `Min Results`（默认 5）
+- `Max Results`（默认 20）
 
-不同数据源会显示不同字段：
+#### Discipline Fields（学科/领域过滤）
 
-| 数据源 | 显示字段 |
-| --- | --- |
-| OpenAlex | OpenAlex API Key、OpenAlex Email、OpenAlex Field、Expand citations |
-| arXiv | arXiv Category |
-| Semantic Scholar | Semantic Scholar API Key、Field/context hint |
-| PubMed | PubMed API Key、PubMed Email、PubMed Tool、Field/context hint |
-| Google Scholar | Serper API Key、Field/context hint |
-| 计算机顶会 | Field/context hint |
-| Crossref | Crossref Email、Field/context hint |
-| WoS Starter | WoS API Key、WoS DB、Web of Science Category、Try external abstracts |
+在单源检索模式下，`Source Filter` 位于配置栏上方，会随当前数据源智能联动：
+- **OpenAlex**：显示 OpenAlex 官方 26 个学科大类（如 Computer Science, Medicine, Engineering）。
+- **Web of Science**：显示 Web of Science 分类。
+- **arXiv**：显示 arXiv 分类。
+- **其他数据源**：自动切换为宽松的文本提示框（Field / Context hint），辅助 LLM 规范化检索式。
 
-`Source Filter` 位于 Research Question 下方，会随所选数据源按 [Discipline Fields](#discipline-fields) 中说明的规则切换为原生过滤或文本提示。
+#### 高级设置分层（Advanced Settings）
 
-#### LLM Settings
+所有深层配置均折叠在 `Advanced settings` 抽屉中，按功能明确划分为五组，避免表单混乱：
 
-字段：
+1. **Retrieval**：
+   - 检索候选池上限（`Retrieval pool max`，默认 3000）
+   - 单路召回上限（`Retrieval lane limit`，默认 1000）
+   - 搜索迭代轮次（`Max iterations`，默认 5）
+2. **Ranking**：
+   - RRF 倒数秩融合参数（`Retrieval RRF k`，默认 60）
+   - 密集嵌入检索模型与 Provider（`Embedding model / provider`）
+   - 外部重排模型（`Reranker model`）
+3. **Citation expansion**：
+   - 引用扩展开关（`Expand citations`）
+   - 前向引用与后向参考文献邻居控制
+4. **LLM**：
+   - LLM Provider（如 deepseek, openai, siliconflow, ollama 等）
+   - API Type（`openai_chat`, `openai_response` 等）
+   - Model 名称：支持**一键获取模型（Fetch Models）**与预设智能下拉，免去手动记忆或繁琐输入的负担
+   - Base URL 与 API Key
+   - 最大生成 Token 数（`Max tokens`）
 
-- Provider
-- API Type
-- Model
-- Base URL
-- API Key
+> **模型获取功能（Fetch Models）**：
+> 点击 Model 栏右上角的 **Fetch Models** 按钮，系统从内置的各主流厂商精选预设模型列表（`GET /api/llm/models?provider=...`）拉取模型清单并注入下拉菜单，全程不向服务器发送 Base URL 或 API Key。列表外的模型 ID 仍可手动输入。
+5. **Source-specific**：
+   - 仅在对应数据源激活时动态展示（如 OpenAlex Email / API Key、PubMed Tool / Email、WoS API Key、Serper Key 等）。未选择的数据源专用凭据绝不平铺干扰界面。
 
-选择 Provider 后，Web UI 会填入默认 Model、API Type 和 Base URL。你可以手动修改。
+#### Check Config 与 Run Search
 
-#### Run Parameters
+- **Check Config**：在发起检索前进行本地静态配置与连通性校验，确保必填凭据完备。
+- **Run Search**：发起端到端检索与重排。
 
-字段：
+#### 配置持久化与自动保存（Config Persistence）
 
-- Min Results
-- Max Results
-- Iterations
-- Try external abstracts
-- Expand citations
+为减少每次打开或刷新浏览器时的重复配置，Web UI 提供安全的偏好持久化机制：
 
-建议：
+1. **浏览器自动静默保存（LocalStorage Auto-Save，仅限非敏感偏好）**：
+   - 界面参数中的**非敏感偏好**（检索模式、Federated Profile、Target Scale、LLM Provider、API Type、Model 名称、Discipline Fields 开关等）会在发生变更时自动保存至当前浏览器的本地缓存。
+   - **API Key、Base URL 等敏感凭据一律不写入浏览器存储**，也不会写入任何 URL、日志或服务器配置。刷新页面后密钥输入框为空，需要重新输入；这是有意为之的安全设计。
+   - 服务器环境变量已配置的 Key（如 `LLM_API_KEY`）在界面显示为 "Configured via environment"，前端只收到布尔状态，从不接收真实值。
+   - **下次打开或刷新页面时，系统会自动恢复所有非敏感偏好**。
+   - 旧版本曾存入 localStorage 的密钥字段会在下次加载时被自动清除。
+   - 高级设置右上角醒目标识 `💾 Remembered（已记住配置）`。
+2. **重置**：
+   - **Reset to Defaults（恢复默认设置）**：一键清除当前浏览器已保存的自定义配置，恢复至服务器环境变量或初始默认值。
+   - 出于安全考虑，Web UI **不再提供**将界面设置写入服务器配置文件的按钮；服务器端配置请通过 CLI `paperseek config set` 完成。
 
-- `Min Results` 默认 `5`。
-- `Max Results` 默认 `50`。
-- `Iterations` 默认 `5`。
-- 首次使用 OpenAlex 时保留 `Expand citations` 开启。
-- 如果想减少请求次数，可关闭 `Expand citations`。
+---
 
-#### Check Config
+### Federated Retrieval 实时可视化
 
-`Check Config` 用于静态诊断。它不会发起真实文献检索，适合检查：
+当执行 Federated Search 时，界面实时展开专用的 **Federated Retrieval panel**，直观呈现多源抓取的全过程：
 
-- Research Question 是否填写。
-- Data Source 是否支持。
-- LLM API Key 是否缺失。
-- API Type 是否支持。
-- Base URL 是否有效。
-- 目标结果范围是否有效。
+#### 多源状态实时追踪（Sources Grid）
 
-#### Run Search
+清晰展示当前 Profile 下每个数据源的独立并发状态：
+- `Pending`（排队等待）
+- `Searching`（正在查询）
+- `Success ✓ [count]`（检索成功并返回具体命中数，如 `PubMed ✓ 25`）
+- `Empty - 0`（检索完成但未命中相关文献）
+- `Rate limited ⚠ 429`（触发源端频控限流，如 Semantic Scholar 429）
+- `Error / Skipped ✕`（源端网络异常或被跳过）
 
-点击 `Run Search` 后：
+#### 智能合并与去重统计（Candidate Merge Stats）
 
-- 页面进入 Processing。
-- 右侧工作流逐步更新。
-- System Dashboard 输出日志。
-- 如果选择了 Discipline Fields，Source Request 日志会显示实际应用的 OpenAlex field filter、arXiv `cat:` 限制，或 WoS / 其他数据源的 query context。
-- 完成后 Results 页面可查看结果。
+实时汇总候选文献的清洗对齐指标：
+- **Raw candidates**：各源并发返回的原始文献总数。
+- **Unique after merge**：经跨源标识符（DOI / Title / Authors）对齐去重后的独立文献数量。
+- **Duplicates merged**：成功识别并合并的重复文献数量。
 
-### Workflow 区域
+#### 源端部分失败容错（Partial Failure Tolerance）
 
-工作流包含四步：
+若个别数据源发生速率限制（429）或连接超时，系统会在面板中清晰标记警示标签，但**不会中断整次搜索**；系统会自动基于其余成功源返回的候选集继续执行后续的融合与重排，确保检索任务的高可用性。
 
-| 步骤 | 含义 |
-| --- | --- |
-| Query Generation | LLM 生成数据源查询。 |
-| Source Request | 请求数据源并记录命中数量。 |
-| Metadata Ranking | 多路召回预重排、embedding 相似度、RRF 融合、LLM 批量评分、可选摘要补全和引用扩展后处理。 |
-| Literature Results | 展示结果摘要，并引导进入 Results。 |
+---
 
-运行中每一步会显示当前状态和阶段产物。`Metadata Ranking` 会把耗时较长的子步骤拆开显示，例如候选准备、多路召回、Embedding similarity、RRF fusion、External reranker、LLM ranking batches、Citation expansion reranking 和 Abstract enrichment；需要多批次 LLM 打分的步骤会显示已完成批次和总批次。
+### Ranking Pipeline 流程可视化
 
-### System Dashboard
+KnowledgeSeek 将文献排序的全流程显式化为立体的流水线步骤（Pipeline Nodes）：
 
-Search 页面右下角日志面板显示：
+```text
+Retrieval (候选集)
+    ↓
+RRF fusion (多路融合)
+    ↓
+Embedding similarity (语义向量相似度)
+    ↓
+Reranking (深度重排)
+    ↓
+LLM ranking (大模型细粒度评估)
+    ↓
+Final results (最终输出论文)
+```
 
-- Run ID。
-- Provider、API Type、Model、数据源。
-- 后端请求是否被接受。
-- LLM 请求开始和返回状态。
-- 数据源请求开始和返回状态。
-- 查询内容、命中数量、迭代轮次。
-- Discipline Fields 的源端应用方式。
-- 错误信息和排错提示。
+每个节点实时显示：
+- 当前阶段处理的候选文献数量流转（例如 `112 candidates` → `80 candidates` → `20 papers`）。
+- 若某个阶段未配置或降级，节点明确展示真实状态（例如 `Local sparse fallback` 或 `External reranker: Not enabled`），杜绝伪造状态。
 
-可点击 `Export Log` 导出日志文本。日志导出用于排查，不是论文结果导出。
+---
 
-### Results 页面
+### 搜索中的实时工作流与日志
 
-Results 页面用于阅读和筛选最终论文列表。常见字段包括：
+在检索运行期间，页面顶部或工作流区实时指示核心阶段：
+1. **Understanding question**（解析研究意图）
+2. **Generating search query**（生成精准检索式）
+3. **Searching sources**（并发请求多数据源）
+4. **Merging duplicate papers**（跨源文献去重与元数据对齐）
+5. **Retrieval fusion**（多路倒数秩融合）
+6. **Ranking candidates**（语义向量与大模型逐批打分）
+7. **Preparing final papers**（生成最终成果卡片）
 
-- Rank
-- Score
-- Title
-- Authors
-- Year
-- Source / Venue
-- Provider
-- Citation count
-- DOI
-- Abstract
-- Keywords
-- Relevance reason
-- Record URL
-- PDF URL，若数据源提供
+右下角的 **System Dashboard** 持续输出带有毫秒级时间戳的结构化事件日志，支持随时一键导出调试。
+
+---
+
+### Results 页面与科研卡片
+
+检索完成后，结果页面按照现代科研工具标准（高信息密度、清晰扫描层级）呈现最终论文列表。
+
+#### 搜索完成紧凑摘要（Compact Summary Banner）
+
+位于结果列表顶部，提供全局质量速览：
+- **Found X unique papers from Y sources**
+- **Z duplicates merged**
+- **N papers entered LLM ranking**
+- **M final papers shown**
+- **Source warnings**（如有部分源限流或超时的简要提示）
+
+#### 科研论文卡片（Paper Cards）
+
+每篇论文采用卡片式精细排版，方便快速阅读与筛选：
+
+- **标题与快速访问**：大号可读字体，点击标题可直接在新标签页打开论文原文或落地页。
+- **元数据条目**：一目了然呈现 `Authors` · `Year` · `Venue / Journal`。
+- **多源来源追溯（Multi-source Provenance Strip）**：
+  若一篇论文被多个数据库共同检索并合并，卡片醒目标记：
+  `Found in: PubMed · OpenAlex · Crossref`
+  完整保留其跨库来源轨迹。
+- **相关性评估框（Why Relevant & Score）**：
+  突出显示 LLM 给出的匹配度分值（0-10 分）以及针对该论文的具体入选理由（Relevance reason），帮助研究者在数秒内判断其与自身课题的契合度。
+- **折叠式摘要（Collapsible Abstract）**：
+  摘要默认保持收起状态，点击 `Show abstract` 即可展开完整中英文摘要，避免单篇长摘要挤占视线。
+- **快捷动作按钮栏（Action Buttons）**：
+  提供整洁的实体链接操作按钮：
+  - `DOI`（链接至权威解析页）
+  - `PDF`（若源端提供开源全本链接，高亮突出）
+  - `Landing Page`（论文发布官方主页）
+  - `Record`（原始数据库收录页面）
 
 支持：
 
-- 搜索结果。
+- 搜索结果过滤。
 - 按分数、引用、年份或排名排序。
 - 按 DOI、摘要、PDF 等可用性过滤。
 - 勾选论文。
-- 导出 CSV。
+- 导出 CSV（若勾选论文，CSV 只导出勾选项；若未勾选，导出当前过滤后的全部结果）。
 
-如果勾选了论文，CSV 只导出勾选项；如果没有勾选，则导出当前过滤后的结果。
+
 
 ### Citation Map 页面
 
@@ -2142,7 +2249,9 @@ PaperSeek Web UI 导出的 CSV 带 UTF-8 BOM。若仍乱码：
 
 - 不要把真实 API Key 写入 README、Skill、测试或 issue。
 - 不要把 `.env` 提交到 Git。
-- Web UI 表单中的 Key 只用于当前会话。
+- Web UI 表单中的 Key 只用于当前会话：不写入浏览器 localStorage、不写入 URL 或日志、不写入服务器配置文件，刷新后即失效。
+- 浏览器 localStorage 只保存非敏感 UI 偏好（检索模式、数据源、Federated Profile、Provider、Model 名称等）；任何 `*_api_key`、token、密码类字段一律不落盘。`GET /api/config/defaults` 只返回 `has_xxx_api_key` 布尔值，永不返回真实密钥。
+- Web UI 不提供服务器配置写入端点；服务器端配置统一通过 CLI `paperseek config set` 管理。
 - CLI 用户级配置会保存到本地配置文件，`paperseek config list` 会遮蔽密钥。
 
 ### 本地历史数据库
@@ -2315,4 +2424,4 @@ paperseek search "your question" --source openalex --json > papers.json
 
 ### Web UI 会保存我的 Key 吗？
 
-不会。Web UI 表单值只用于当前会话。CLI 的 `paperseek config set` 会保存到本地用户级配置文件，这是用户主动执行的行为。
+不会。Web UI 只在**当前浏览器本地缓存（localStorage）**中记住非敏感 UI 偏好（检索模式、数据源、Federated Profile、LLM Provider、Model 名称等）；API Key、Base URL 等敏感凭据从不写入浏览器存储、URL、日志或服务器配置文件，刷新页面后即失效。服务器端默认配置请通过 CLI `paperseek config set` 写入用户级配置文件。点击“Reset to Defaults”可随时清除浏览器已存偏好；旧版本残留的密钥字段会在下次加载时被自动清除。

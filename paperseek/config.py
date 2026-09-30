@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from paperseek.disciplines import normalize_source_filter_values
 from paperseek.source_metadata import supported_source_ids
 
+SUPPORTED_EGRESS_MODES = ("direct", "proxy", "pool", "auto")
+
 
 def _int_env(name: str, default: int, minimum: int = 0) -> int:
     raw = os.environ.get(name)
@@ -28,6 +30,8 @@ class AgentConfig:
     pubmed_email: str = ""
     pubmed_tool: str = "paperseek"
     serper_api_key: str = ""
+    federated_profile: str = "general"
+    federated_max_per_source: int = 25
     llm_api_key: str = ""
     llm_provider: str = "openai"
     llm_api_type: str = ""
@@ -63,6 +67,8 @@ class AgentConfig:
     retrieval_reranker_base_url: str = ""
     retrieval_reranker_api_key: str = ""
     retrieval_crossref_enrichment: bool = False
+    egress_mode: str = "auto"
+    egress_proxy_ids: tuple[str, ...] = field(default_factory=tuple)
 
     @classmethod
     def from_env(cls) -> "AgentConfig":
@@ -79,6 +85,8 @@ class AgentConfig:
             pubmed_email=os.environ.get("PUBMED_EMAIL", ""),
             pubmed_tool=os.environ.get("PUBMED_TOOL", "paperseek"),
             serper_api_key=os.environ.get("SERPER_API_KEYS", "") or os.environ.get("SERPER_API_KEY", ""),
+            federated_profile=os.environ.get("FEDERATED_PROFILE", "general"),
+            federated_max_per_source=_int_env("FEDERATED_MAX_PER_SOURCE", 25, minimum=1),
             llm_api_key=os.environ.get("LLM_API_KEY", ""),
             llm_provider=provider,
             llm_api_type=api_type,
@@ -114,6 +122,8 @@ class AgentConfig:
             retrieval_reranker_base_url=os.environ.get("RETRIEVAL_RERANKER_BASE_URL", ""),
             retrieval_reranker_api_key=os.environ.get("RETRIEVAL_RERANKER_API_KEY", ""),
             retrieval_crossref_enrichment=os.environ.get("RETRIEVAL_CROSSREF_ENRICHMENT", "").lower() in ("1", "true", "yes"),
+            egress_mode=(os.environ.get("EGRESS_MODE", "auto") or "auto").strip().lower(),
+            egress_proxy_ids=tuple(item.strip().lower() for item in os.environ.get("EGRESS_PROXY_IDS", "").split(",") if item.strip()),
         )
 
     def validate(self):
@@ -130,6 +140,11 @@ class AgentConfig:
         self.llm_api_type = (self.llm_api_type or default_api_type(self.llm_provider)).lower()
         if not self.llm_api_key and self.llm_provider != "ollama":
             missing.append("LLM_API_KEY")
+        if self.llm_provider == "custom" and not (self.llm_base_url or "").strip():
+            missing.append("LLM_BASE_URL")
+        self.egress_mode = (self.egress_mode or "auto").strip().lower()
+        if self.egress_mode not in SUPPORTED_EGRESS_MODES:
+            raise ValueError(f"EGRESS_MODE must be one of {', '.join(SUPPORTED_EGRESS_MODES)}, got '{self.egress_mode}'")
         if self.llm_provider not in SUPPORTED_LLM_PROVIDERS:
             raise ValueError(f"LLM_PROVIDER must be one of {', '.join(SUPPORTED_LLM_PROVIDERS)}, got '{self.llm_provider}'")
         if self.llm_api_type not in SUPPORTED_LLM_API_TYPES:
@@ -222,3 +237,60 @@ def default_base_url(provider: str, api_type: str = "") -> str:
     if api_type == "anthropic_messages" and provider == "anthropic":
         return "https://api.anthropic.com"
     return urls.get(provider, "")
+
+PROVIDER_PRESET_MODELS: dict[str, list[str]] = {
+    "openai": ["gpt-5.4-mini", "gpt-4o", "gpt-4o-mini", "o1", "o1-mini", "o3-mini", "gpt-4-turbo"],
+    "anthropic": ["claude-sonnet-4-6", "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
+    "google": ["gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+    "deepseek": ["deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
+    "siliconflow": [
+        "deepseek-ai/DeepSeek-V4-Flash",
+        "deepseek-ai/DeepSeek-V3",
+        "deepseek-ai/DeepSeek-R1",
+        "Qwen/Qwen2.5-72B-Instruct",
+        "Qwen/Qwen2.5-32B-Instruct",
+        "Qwen/Qwen2.5-7B-Instruct",
+        "THUDM/glm-4-9b-chat",
+        "meta-llama/Meta-Llama-3.1-70B-Instruct",
+    ],
+    "openrouter": [
+        "openai/gpt-5.4-mini",
+        "openai/gpt-4o",
+        "openai/gpt-4o-mini",
+        "deepseek/deepseek-chat",
+        "deepseek/deepseek-r1",
+        "anthropic/claude-3.5-sonnet",
+        "google/gemini-2.5-flash",
+        "meta-llama/llama-3.3-70b-instruct",
+    ],
+    "dashscope": ["qwen3.6-plus", "qwen-max", "qwen-plus", "qwen-turbo", "qwen2.5-72b-instruct", "deepseek-v3", "deepseek-r1"],
+    "zhipu": ["glm-5.1", "glm-4-plus", "glm-4-air", "glm-4-flash", "glm-4-long"],
+    "moonshot": ["kimi-k2.6", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+    "ollama": [
+        "qwen3:8b",
+        "qwen2.5:7b",
+        "qwen2.5:14b",
+        "qwen2.5:32b",
+        "llama3.1:8b",
+        "llama3.3:70b",
+        "deepseek-r1:8b",
+        "deepseek-r1:14b",
+        "mistral:latest",
+    ],
+    "modelscope": [
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "Qwen/Qwen2.5-72B-Instruct",
+        "deepseek-ai/DeepSeek-V3",
+        "deepseek-ai/DeepSeek-R1",
+    ],
+    "cstcloud": ["deepseek-v4-flash", "deepseek-v3", "deepseek-r1", "qwen2.5-72b-instruct"],
+    "volcengine": ["doubao-seed-2-0-mini-260428", "doubao-pro-32k", "doubao-lite-32k", "deepseek-v3", "deepseek-r1"],
+    "hunyuan": ["hunyuan-turbos-latest", "hunyuan-pro", "hunyuan-standard", "hunyuan-lite"],
+    "qianfan": ["ernie-5.0", "ernie-4.0-turbo-8k", "ernie-3.5-8k", "deepseek-v3", "deepseek-r1"],
+    "nvidia": ["nvidia/llama-3.3-nemotron-super-49b-v1.5", "meta/llama-3.3-70b-instruct", "deepseek-ai/deepseek-r1"],
+}
+
+
+def preset_models(provider: str) -> list[str]:
+    provider = (provider or "openai").lower()
+    return list(PROVIDER_PRESET_MODELS.get(provider, []))

@@ -98,6 +98,14 @@ Docker 镜像接受与 CLI 和 Web UI 后端相同的环境变量。绝大多数
 | `SERPER_API_KEYS` | `serper-key-1,serper-key-2` |
 | `CROSSREF_EMAIL` | `you@example.org` |
 
+Federated 多源检索（MOSAIC）为可选依赖，默认镜像不包含。如需启用，把镜像内的安装命令改为 `pip install ".[federated]"`（或 `pip install "paperseek[federated]"`），要求 Python ≥ 3.11；对应环境变量：
+
+| 变量 | 示例 |
+| --- | --- |
+| `DATA_SOURCE` | `federated` |
+| `FEDERATED_PROFILE` | `general`（或 `biomed`、`cs`） |
+| `FEDERATED_MAX_PER_SOURCE` | `25` |
+
 高级搜索、批量排序、多路召回、历史路径等参数都可以继续使用，默认值见 `.env.example` 的注释项。
 
 如果你不想在服务器端配置密钥，用户也可以在 Web UI 中为当前浏览器会话填写 LLM Key 和数据源 Key。PaperSeek 不会保存这些本次会话密钥。

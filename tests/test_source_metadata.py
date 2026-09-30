@@ -6,7 +6,7 @@ from paperseek.source_metadata import get_source_metadata, list_source_metadata,
 class SourceMetadataTest(unittest.TestCase):
     def test_registered_sources_are_ordered_and_descriptive(self):
         sources = list_source_metadata()
-        self.assertEqual([item["id"] for item in sources], ["openalex", "arxiv", "semanticscholar", "pubmed", "googlescholar", "paperhub", "crossref", "wos"])
+        self.assertEqual([item["id"] for item in sources], ["openalex", "arxiv", "semanticscholar", "pubmed", "googlescholar", "paperhub", "crossref", "federated", "wos"])
         self.assertIn("openalex", supported_source_ids())
         self.assertTrue(get_source_metadata("openalex").supports_citation_expansion)
         self.assertTrue(get_source_metadata("arxiv").supports_pdf_links)

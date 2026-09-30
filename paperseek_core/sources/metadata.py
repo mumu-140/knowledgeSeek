@@ -87,6 +87,32 @@ SOURCE_METADATA: Dict[str, SourceMetadata] = {
             "Field/context hints are used only as bibliographic search context.",
         ],
     ),
+    "federated": SourceMetadata(
+        id="federated",
+        display_name="Federated multi-source (MOSAIC)",
+        status="optional_dependency",
+        description="Fan-out retrieval across multiple scholarly sources via the optional MOSAIC library, merged into one candidate pool before PaperSeek ranking.",
+        api_key="not_required",
+        default=False,
+        supports_abstracts=True,
+        supports_citations=True,
+        supports_citation_expansion=False,
+        supports_pdf_links=True,
+        supported_parameters=[
+            "federated_profile",
+            "federated_max_per_source",
+            "search_field",
+            "target_min",
+            "target_max",
+            "max_iterations",
+        ] + RETRIEVAL_PARAMETERS,
+        optional_config=["FEDERATED_PROFILE", "FEDERATED_MAX_PER_SOURCE"],
+        notes=[
+            "Requires the optional 'mosaic' package; install with: pip install 'paperseek[federated]'.",
+            "Profiles: biomed (PubMed, Europe PMC, PMC, OpenAlex, Semantic Scholar, bioRxiv/medRxiv, Crossref), cs (OpenAlex, Semantic Scholar, arXiv, DBLP, Crossref), general (OpenAlex, Semantic Scholar, Crossref, DOAJ).",
+            "Sources missing an API key are skipped automatically; a single source failure never aborts the whole search.",
+        ],
+    ),
     "arxiv": SourceMetadata(
         id="arxiv",
         display_name="arXiv",
@@ -250,7 +276,7 @@ def require_source_metadata(source: str) -> SourceMetadata:
 def list_source_metadata() -> List[Dict[str, object]]:
     return [
         SOURCE_METADATA[key].to_dict()
-        for key in ("openalex", "arxiv", "semanticscholar", "pubmed", "googlescholar", "paperhub", "crossref", "wos")
+        for key in ("openalex", "arxiv", "semanticscholar", "pubmed", "googlescholar", "paperhub", "crossref", "federated", "wos")
     ]
 
 

@@ -356,6 +356,7 @@ paperseek search "open innovation and digital platforms" --source openalex
 | Computer science top conferences | Supported | Not required | Top CS conference papers from ICLR, ICML, NeurIPS, AAAI, and NDSS | Searches computer science top-conference records and needs no source key. |
 | Crossref | Supported | Usually not required | DOI checks, publication metadata, journal and publisher validation | DOI and metadata registry; useful for metadata verification and DOI completion. |
 | Web of Science Starter | Adapter retained | Required | Users with approved Clarivate API access | Commercial database API; availability and returned fields depend on subscription and institutional entitlement. |
+| Federated multi-source (MOSAIC) | Optional dependency | Not required | One query fanned out to many sources for a wider candidate pool | Fans out via the optional MOSAIC library across PubMed/Europe PMC/OpenAlex/Semantic Scholar/arXiv/DBLP/Crossref/DOAJ and merges before ranking; requires Python >= 3.11 and `pip install "paperseek[federated]"`; ranking still runs through PaperSeek's RRF/reranker/LLM stages. |
 
 ## LLM Providers
 

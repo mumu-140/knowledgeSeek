@@ -22,6 +22,24 @@ class PackagingTest(unittest.TestCase):
         self.assertNotRegex(pyproject, re.compile(r"^wos-search\s*=", re.MULTILINE))
         self.assertNotRegex(pyproject, re.compile(r"^wos-search-web\s*=", re.MULTILINE))
 
+    def test_federated_extra_is_optional_and_gated(self):
+        # MOSAIC must stay an opt-in extra restricted to Python >= 3.11 so a
+        # base install (>=3.8) never pulls it and never breaks.
+        pyproject = read_text("pyproject.toml")
+        self.assertIn("federated = [", pyproject)
+        self.assertIn("mosaic-search>=1.5.5", pyproject)
+        self.assertIn("python_version >= '3.11'", pyproject)
+        # No non-optional mention of mosaic in core runtime dependencies.
+        dependencies = pyproject.split("dependencies = [", 1)[1].split("]", 1)[0]
+        self.assertNotIn("mosaic", dependencies)
+        # requirements.txt mirrors the base install only.
+        requirements = read_text("requirements.txt")
+        self.assertNotIn("mosaic", requirements.lower())
+        # Forbidden heavyweight extras must not ride along with federated.
+        federated_extra = pyproject.split("federated = [", 1)[1].split("]", 1)[0]
+        for forbidden in ("playwright", "notebooklm", "flask", "sqlite-vec", "scrapy", "selenium"):
+            self.assertNotIn(forbidden, federated_extra)
+
     def test_readmes_cover_installation_and_primary_links(self):
         expected_install_paths = (
             "python -m pip install paperseek",

@@ -1,0 +1,69 @@
+{
+  "description": "Fixed query set for baseline (single-source) vs federated (MOSAIC) comparison. See docs/plans/2026-09-24-mosaic-federated-integration.md Phase 6.",
+  "version": 1,
+  "baseline_source": "openalex",
+  "queries": [
+    {
+      "id": "bio-01",
+      "kind": "life-science",
+      "profile": "biomed",
+      "query": "CRISPR base editing off-target evaluation"
+    },
+    {
+      "id": "bio-02",
+      "kind": "life-science",
+      "profile": "biomed",
+      "query": "tumor immunotherapy checkpoint inhibitor resistance"
+    },
+    {
+      "id": "bio-03",
+      "kind": "life-science",
+      "profile": "biomed",
+      "query": "single cell RNA sequencing tumor microenvironment"
+    },
+    {
+      "id": "bio-04",
+      "kind": "life-science",
+      "profile": "biomed",
+      "query": "gut microbiome metabolic disease association"
+    },
+    {
+      "id": "bio-05",
+      "kind": "life-science",
+      "profile": "biomed",
+      "query": "protein structure prediction AlphaFold applications"
+    },
+    {
+      "id": "bio-06",
+      "kind": "life-science",
+      "profile": "biomed",
+      "query": "blood brain barrier drug delivery nanoparticles"
+    },
+    {
+      "id": "cs-01",
+      "kind": "computer-science",
+      "profile": "cs",
+      "query": "graph neural network recommendation systems"
+    },
+    {
+      "id": "cs-02",
+      "kind": "computer-science",
+      "profile": "cs",
+      "query": "federated learning privacy preserving machine learning"
+    },
+    {
+      "id": "exact-01",
+      "kind": "exact-paper",
+      "profile": "general",
+      "query": "Attention is all you need",
+      "expected_doi": "10.65215/2q58a426"
+    },
+    {
+      "id": "exact-02",
+      "kind": "exact-paper",
+      "profile": "general",
+      "query": "Highly accurate protein structure prediction with AlphaFold",
+      "expected_doi": "10.1038/s41586-021-03819-2"
+    }
+  ]
+}
