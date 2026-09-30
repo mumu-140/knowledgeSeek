@@ -133,6 +133,7 @@ class EgressRouter:
         self.allow_http_endpoint = allow_http_endpoint
         self.max_attempts = _int_env(self.environ, "EGRESS_MAX_ATTEMPTS", 4)
         self.connect_timeout = _int_env(self.environ, "EGRESS_CONNECT_TIMEOUT", 8)
+        self.auto_direct_connect_timeout = _int_env(self.environ, "EGRESS_AUTO_DIRECT_CONNECT_TIMEOUT", 2)
         self.failure_threshold = _int_env(self.environ, "PROXY_FAILURE_THRESHOLD", 3)
         self.cooldown_seconds = _int_env(self.environ, "PROXY_COOLDOWN_SECONDS", 60)
         self.retry_429 = _bool_env(self.environ, "EGRESS_RETRY_429", False)
@@ -163,21 +164,26 @@ class EgressRouter:
         kwargs.pop("proxies", None)
         kwargs["allow_redirects"] = False
         requested_timeout = kwargs.get("timeout")
-        if isinstance(requested_timeout, (int, float)) and requested_timeout > 0:
-            kwargs["timeout"] = (min(float(requested_timeout), float(self.connect_timeout)), float(requested_timeout))
-        elif isinstance(requested_timeout, (tuple, list)) and len(requested_timeout) == 2:
-            connect_timeout, read_timeout = requested_timeout
-            try:
-                connect_timeout = min(float(connect_timeout), float(self.connect_timeout))
-            except (TypeError, ValueError):
-                connect_timeout = float(self.connect_timeout)
-            kwargs["timeout"] = (connect_timeout, read_timeout)
         last_error = None
         last_response = None
         self.attempted_routes = []
         for candidate in self._candidates():
             route = "direct" if candidate is None else candidate.id
             self.attempted_routes.append(route)
+            connect_limit = (
+                self.auto_direct_connect_timeout
+                if self.mode == "auto" and candidate is None
+                else self.connect_timeout
+            )
+            if isinstance(requested_timeout, (int, float)) and requested_timeout > 0:
+                kwargs["timeout"] = (min(float(requested_timeout), float(connect_limit)), float(requested_timeout))
+            elif isinstance(requested_timeout, (tuple, list)) and len(requested_timeout) == 2:
+                connect_timeout, read_timeout = requested_timeout
+                try:
+                    connect_timeout = min(float(connect_timeout), float(connect_limit))
+                except (TypeError, ValueError):
+                    connect_timeout = float(connect_limit)
+                kwargs["timeout"] = (connect_timeout, read_timeout)
             if candidate is not None:
                 kwargs["proxies"] = candidate.proxies
             else:

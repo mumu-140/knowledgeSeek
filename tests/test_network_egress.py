@@ -114,6 +114,26 @@ class EgressRouterTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(captured["timeout"], (3.0, 120.0))
 
+    def test_auto_uses_short_direct_probe_then_regular_proxy_connect_timeout(self):
+        timeouts = []
+
+        def fake_get(url, **kwargs):
+            proxies = kwargs.get("proxies") or {}
+            timeouts.append(kwargs.get("timeout"))
+            if not proxies.get("https"):
+                raise requests.ConnectionError("direct unavailable")
+            return FakeResponse(200)
+
+        env = dict(self._env())
+        env["EGRESS_CONNECT_TIMEOUT"] = "8"
+        env["EGRESS_AUTO_DIRECT_CONNECT_TIMEOUT"] = "2"
+        router = EgressRouter(mode="auto", environ=env)
+        with patch("paperseek_core.network.egress.requests.get", side_effect=fake_get):
+            response = router.request("GET", "https://api.example.com/v1", timeout=120)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(router.attempted_routes, ["direct", "main"])
+        self.assertEqual(timeouts, [(2.0, 120.0), (8.0, 120.0)])
+
     def test_explicit_proxy_selection_uses_only_named_profiles(self):
         router = EgressRouter(mode="proxy", proxy_ids=["backup"], environ=self._env())
         self.assertEqual([item.id for item in router._selected_profiles()], ["backup"])
