@@ -1,4 +1,6 @@
 import time
+import sys
+import types
 import unittest
 from unittest.mock import patch
 
@@ -6,6 +8,7 @@ from paperseek_core.integrations.mosaic_provider import (
     DEFAULT_PROFILE,
     MosaicFederatedProvider,
     SOURCE_PROFILES,
+    _RoutedMosaicSource,
     is_federated_available,
 )
 
@@ -334,6 +337,50 @@ class MosaicFederatedProviderTest(unittest.TestCase):
         self.assertEqual(captured["sources"]["pmc"]["api_key"], "ncbi-test-key")
         self.assertEqual(getattr(sources[0], "_email"), "oa@example.test")
         self.assertEqual(getattr(sources[1], "_email"), "cr@example.test")
+
+    def test_routed_mosaic_source_uses_router_and_restores_module_httpx(self):
+        module_name = "tests._fake_mosaic_httpx_source"
+        module = types.ModuleType(module_name)
+
+        class OriginalHTTPX:
+            URL = staticmethod(lambda value: value)
+
+        original_httpx = OriginalHTTPX()
+        module.httpx = original_httpx
+        sys.modules[module_name] = module
+
+        class Response:
+            status_code = 200
+            def raise_for_status(self): return None
+            def json(self): return {"ok": True}
+
+        class Router:
+            def __init__(self): self.calls = []
+            def request(self, method, url, **kwargs):
+                self.calls.append((method, url, kwargs))
+                return Response()
+
+        class Source:
+            name = "Fake"
+            def available(self): return True
+            def search(self, query, max_results=25, filters=None):
+                with module.httpx.Client(timeout=7, headers={"X-Base": "1"}) as client:
+                    response = client.get("https://api.example.test/search", params={"q": query}, headers={"X-Extra": "2"})
+                return [response.json()]
+
+        Source.__module__ = module_name
+        router = Router()
+        try:
+            routed = _RoutedMosaicSource(Source(), router)
+            result = routed.search("motif")
+            self.assertEqual(result, [{"ok": True}])
+            self.assertEqual(router.calls[0][0], "GET")
+            self.assertEqual(router.calls[0][1], "https://api.example.test/search")
+            self.assertEqual(router.calls[0][2]["params"], {"q": "motif"})
+            self.assertEqual(router.calls[0][2]["headers"], {"X-Base": "1", "X-Extra": "2"})
+            self.assertIs(module.httpx, original_httpx)
+        finally:
+            sys.modules.pop(module_name, None)
 
     def test_retrieval_capabilities_single_relevance_lane(self):
         from paperseek_core.retrieval import RetrievalLane

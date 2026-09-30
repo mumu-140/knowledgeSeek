@@ -5,6 +5,8 @@ from html import unescape
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import re
 import requests
+
+from paperseek_core.network import redact_network_text
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -116,10 +118,7 @@ class ProviderError(Exception):
 
 
 def _redact_request_text(value: object) -> str:
-    text = str(value or "")
-    if not text:
-        return ""
-    return re.sub(r"([?&](?:api_key|apikey|key|token|access_token)=)[^&\s)]+", r"\1<redacted>", text, flags=re.I)
+    return redact_network_text(value)
 
 
 def reconstruct_abstract(inverted_index: Optional[Dict[str, List[int]]]) -> str:
@@ -148,6 +147,10 @@ def normalize_doi(value: str) -> str:
     return value
 
 
+def _egress_kwargs(router) -> Dict[str, Any]:
+    return {"egress_router": router} if router is not None else {}
+
+
 def get_with_retries(
     source: str,
     url: str,
@@ -157,18 +160,23 @@ def get_with_retries(
     timeout: int = 30,
     query: str = "",
     attempts: int = 3,
+    egress_router=None,
 ):
     last_exc: Optional[requests.RequestException] = None
     started = time.perf_counter()
     for attempt in range(1, max(1, attempts) + 1):
         try:
-            response = requests.get(url, params=params, headers=headers, timeout=timeout)
+            if egress_router is None:
+                response = requests.get(url, params=params, headers=headers, timeout=timeout)
+            else:
+                response = egress_router.request("GET", url, params=params, headers=headers, timeout=timeout)
             info = {
                 "method": "GET",
                 "url": _redact_request_text(response.url),
                 "status": response.status_code,
                 "elapsed_ms": int((time.perf_counter() - started) * 1000),
                 "attempts": attempt,
+                "egress": getattr(egress_router, "last_route", "") if egress_router is not None else "",
             }
             if response.status_code in {429, 500, 502, 503, 504} and attempt < attempts:
                 time.sleep(_retry_delay(response, attempt, source))
@@ -207,7 +215,8 @@ def _retry_delay(response: requests.Response, attempt: int, source: str = "") ->
 class OpenAlexProvider:
     BASE_URL = "https://api.openalex.org/works"
 
-    def __init__(self, api_key: str = "", email: str = ""):
+    def __init__(self, api_key: str = "", email: str = "", egress_router=None):
+        self.egress_router = egress_router
         self.api_key = (api_key or "").strip()
         self.email = (email or "").strip()
         self.last_response_info: Dict[str, Any] = {}
@@ -276,7 +285,7 @@ class OpenAlexProvider:
         }
 
         try:
-            response, info = get_with_retries("openalex", self.BASE_URL, params=params, headers=headers, timeout=45, query=query)
+            response, info = get_with_retries("openalex", self.BASE_URL, params=params, headers=headers, timeout=45, query=query, **_egress_kwargs(self.egress_router))
             self.last_response_info = info
         except ProviderError as exc:
             self.last_response_info = {"method": "GET", "url": self.BASE_URL, "status": "request_error", "elapsed_ms": None}
@@ -552,7 +561,7 @@ class OpenAlexProvider:
         url = f"{self.BASE_URL}/{identifier}"
         headers = {"Accept": "application/json", "User-Agent": self._user_agent()}
         try:
-            response, info = get_with_retries("openalex", url, params=self._base_params(), headers=headers, timeout=30, query=identifier)
+            response, info = get_with_retries("openalex", url, params=self._base_params(), headers=headers, timeout=30, query=identifier, **_egress_kwargs(self.egress_router))
             self.last_response_info = info
         except ProviderError as exc:
             self.last_response_info = {"method": "GET", "url": url, "status": "request_error", "elapsed_ms": None}
@@ -599,7 +608,7 @@ class OpenAlexProvider:
         })
         headers = {"Accept": "application/json", "User-Agent": self._user_agent()}
         try:
-            response, info = get_with_retries("openalex", self.BASE_URL, params=params, headers=headers, timeout=30, query=seed_id)
+            response, info = get_with_retries("openalex", self.BASE_URL, params=params, headers=headers, timeout=30, query=seed_id, **_egress_kwargs(self.egress_router))
             self.last_response_info = info
         except ProviderError as exc:
             self.last_response_info = {"method": "GET", "url": self.BASE_URL, "status": "request_error", "elapsed_ms": None}
@@ -698,7 +707,8 @@ class OpenAlexProvider:
 class CrossrefProvider:
     BASE_URL = "https://api.crossref.org/works"
 
-    def __init__(self, email: str = ""):
+    def __init__(self, email: str = "", egress_router=None):
+        self.egress_router = egress_router
         self.email = (email or "").strip()
         self.last_response_info: Dict[str, Any] = {}
 
@@ -748,7 +758,7 @@ class CrossrefProvider:
         }
 
         try:
-            response, info = get_with_retries("crossref", self.BASE_URL, params=params, headers=headers, timeout=45, query=query)
+            response, info = get_with_retries("crossref", self.BASE_URL, params=params, headers=headers, timeout=45, query=query, **_egress_kwargs(self.egress_router))
             self.last_response_info = info
         except ProviderError as exc:
             self.last_response_info = {"method": "GET", "url": self.BASE_URL, "status": "request_error", "elapsed_ms": None}
@@ -863,7 +873,8 @@ class CrossrefProvider:
 class GoogleScholarSerperProvider:
     BASE_URL = "https://google.serper.dev/scholar"
 
-    def __init__(self, api_key: str = ""):
+    def __init__(self, api_key: str = "", egress_router=None):
+        self.egress_router = egress_router
         self.api_keys = _split_api_keys(api_key)
         self.last_response_info: Dict[str, Any] = {}
         self._lock = threading.Lock()
@@ -981,13 +992,14 @@ class GoogleScholarSerperProvider:
                 "X-API-KEY": api_key,
             }
             try:
-                response = requests.post(self.BASE_URL, json=payload, headers=headers, timeout=45)
+                response = (self.egress_router.request("POST", self.BASE_URL, json=payload, headers=headers, timeout=45) if self.egress_router is not None else requests.post(self.BASE_URL, json=payload, headers=headers, timeout=45))
                 info = {
                     "method": "POST",
                     "url": self.BASE_URL,
                     "status": response.status_code,
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                     "attempts": attempt,
+                    "egress": getattr(self.egress_router, "last_route", "") if self.egress_router is not None else "",
                 }
                 last_response = response
                 if response.status_code in {401, 403, 408, 409, 425, 429, 500, 502, 503, 504} and attempt < attempts:
@@ -1218,7 +1230,8 @@ class ArxivProvider:
     _lock = threading.Lock()
     _last_request_at = 0.0
 
-    def __init__(self):
+    def __init__(self, egress_router=None):
+        self.egress_router = egress_router
         self.last_response_info: Dict[str, Any] = {}
 
     def retrieval_capabilities(self) -> ProviderRetrievalCapabilities:
@@ -1244,7 +1257,7 @@ class ArxivProvider:
         headers = {"Accept": "application/atom+xml", "User-Agent": "paperseek/1.0"}
         try:
             self._throttle()
-            response, info = get_with_retries("arxiv", self.BASE_URL, params=params, headers=headers, timeout=20, query=query, attempts=1)
+            response, info = get_with_retries("arxiv", self.BASE_URL, params=params, headers=headers, timeout=20, query=query, attempts=1, **_egress_kwargs(self.egress_router))
             self.last_response_info = info
         except ProviderError as exc:
             self.last_response_info = {"method": "GET", "url": self.BASE_URL, "status": "request_error", "elapsed_ms": None}
@@ -1381,7 +1394,8 @@ class SemanticScholarProvider:
         "citationCount",
     )
 
-    def __init__(self, api_key: str = ""):
+    def __init__(self, api_key: str = "", egress_router=None):
+        self.egress_router = egress_router
         self.api_key = (api_key or "").strip()
         self.last_response_info: Dict[str, Any] = {}
 
@@ -1410,7 +1424,7 @@ class SemanticScholarProvider:
         if self.api_key:
             headers["x-api-key"] = self.api_key
         try:
-            response, info = get_with_retries("semanticscholar", self.BASE_URL, params=params, headers=headers, timeout=45, query=query)
+            response, info = get_with_retries("semanticscholar", self.BASE_URL, params=params, headers=headers, timeout=45, query=query, **_egress_kwargs(self.egress_router))
             self.last_response_info = info
         except ProviderError as exc:
             self.last_response_info = {"method": "GET", "url": self.BASE_URL, "status": "request_error", "elapsed_ms": None}
@@ -1425,6 +1439,7 @@ class SemanticScholarProvider:
                 headers=headers,
                 timeout=45,
                 query=query,
+                **_egress_kwargs(self.egress_router),
             )
             fallback_info["fallback"] = "basic_fields"
             self.last_response_info = fallback_info
@@ -1461,7 +1476,7 @@ class SemanticScholarProvider:
         if self.api_key:
             headers["x-api-key"] = self.api_key
         try:
-            response, info = get_with_retries("semanticscholar", self.BULK_URL, params=params, headers=headers, timeout=45, query=query)
+            response, info = get_with_retries("semanticscholar", self.BULK_URL, params=params, headers=headers, timeout=45, query=query, **_egress_kwargs(self.egress_router))
             self.last_response_info = info
         except ProviderError as exc:
             self.last_response_info = {"method": "GET", "url": self.BULK_URL, "status": "request_error", "elapsed_ms": None}
@@ -1476,6 +1491,7 @@ class SemanticScholarProvider:
                 headers=headers,
                 timeout=45,
                 query=query,
+                **_egress_kwargs(self.egress_router),
             )
             fallback_info["fallback"] = "basic_fields"
             self.last_response_info = fallback_info
@@ -1539,7 +1555,8 @@ class SemanticScholarProvider:
 class PubMedProvider:
     BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
-    def __init__(self, api_key: str = "", email: str = "", tool: str = "paperseek"):
+    def __init__(self, api_key: str = "", email: str = "", tool: str = "paperseek", egress_router=None):
+        self.egress_router = egress_router
         self.api_key = (api_key or "").strip()
         self.email = (email or "").strip()
         self.tool = (tool or "paperseek").strip()
@@ -1596,7 +1613,7 @@ class PubMedProvider:
         params = {**params, **self._common_params()}
         headers = {"Accept": "application/json", "User-Agent": self._user_agent()}
         try:
-            response, info = get_with_retries("pubmed", url, params=params, headers=headers, timeout=45, query=query)
+            response, info = get_with_retries("pubmed", url, params=params, headers=headers, timeout=45, query=query, **_egress_kwargs(self.egress_router))
             self.last_response_info = info
         except ProviderError as exc:
             self.last_response_info = {"method": "GET", "url": url, "status": "request_error", "elapsed_ms": None}
@@ -1620,7 +1637,7 @@ class PubMedProvider:
         }
         headers = {"Accept": "application/xml", "User-Agent": self._user_agent()}
         try:
-            response, info = get_with_retries("pubmed", url, params=params, headers=headers, timeout=45, query=query)
+            response, info = get_with_retries("pubmed", url, params=params, headers=headers, timeout=45, query=query, **_egress_kwargs(self.egress_router))
             self.last_response_info = info
         except ProviderError:
             return {}
@@ -1707,7 +1724,8 @@ class PaperHubProvider:
     _lock = threading.Lock()
     _paper_cache: Optional[List[Dict[str, Any]]] = None
 
-    def __init__(self):
+    def __init__(self, egress_router=None):
+        self.egress_router = egress_router
         self.last_response_info: Dict[str, Any] = {}
 
     def retrieval_capabilities(self) -> ProviderRetrievalCapabilities:
@@ -1748,7 +1766,7 @@ class PaperHubProvider:
         with PaperHubProvider._lock:
             if PaperHubProvider._paper_cache is not None:
                 return PaperHubProvider._paper_cache
-            response, info = get_with_retries("paperhub", self.MANIFEST_URL, headers={"Accept": "application/json"}, timeout=45, query=query)
+            response, info = get_with_retries("paperhub", self.MANIFEST_URL, headers={"Accept": "application/json"}, timeout=45, query=query, **_egress_kwargs(self.egress_router))
             self.last_response_info = info
             if response.status_code >= 400:
                 raise ProviderError("paperhub", f"Paper Hub manifest returned HTTP {response.status_code}.", status=response.status_code, body=response.text[:1000], query=query)
@@ -1762,7 +1780,7 @@ class PaperHubProvider:
                 if not file_name:
                     continue
                 url = f"{self.RAW_BASE_URL}/{file_name}"
-                shard_response, shard_info = get_with_retries("paperhub", url, headers={"Accept": "application/json"}, timeout=60, query=query)
+                shard_response, shard_info = get_with_retries("paperhub", url, headers={"Accept": "application/json"}, timeout=60, query=query, **_egress_kwargs(self.egress_router))
                 self.last_response_info = shard_info
                 if shard_response.status_code >= 400:
                     continue

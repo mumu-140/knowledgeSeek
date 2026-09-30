@@ -8,6 +8,9 @@ import re
 import requests
 from threading import Lock
 import time
+from urllib.parse import urlsplit
+
+from paperseek_core.network import EgressRouter, redact_network_text
 
 
 class LLMError(Exception):
@@ -84,6 +87,26 @@ def _auth_headers(api_key: str) -> Dict[str, str]:
     return headers
 
 
+def _egress_request(router, method: str, url: str, **kwargs):
+    if router is None:
+        caller = getattr(requests, method.lower())
+        return caller(url, **kwargs)
+    return router.request(method, url, **kwargs)
+
+
+def _egress_label(router) -> str:
+    return getattr(router, "last_route", "") if router is not None else ""
+
+
+def _endpoint_host(url: str) -> str:
+    try:
+        parsed = urlsplit(str(url or ""))
+        host = parsed.hostname or "configured-endpoint"
+        return f"{host}:{parsed.port}" if parsed.port else host
+    except Exception:
+        return "configured-endpoint"
+
+
 MODELSCOPE_QUOTA_HEADERS = {
     "user_limit": "modelscope-ratelimit-requests-limit",
     "user_remaining": "modelscope-ratelimit-requests-remaining",
@@ -119,6 +142,7 @@ class OpenAIChatClient(LLMClient):
         base_url: str = "",
         max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
         timeout_seconds: int = DEFAULT_LLM_TIMEOUT_SECONDS,
+        egress_router=None,
     ):
         self.api_key = api_key
         self.model = model
@@ -126,6 +150,7 @@ class OpenAIChatClient(LLMClient):
         self.max_tokens = max(0, int(max_tokens or 0))
         self.timeout_seconds = _coerce_timeout_seconds(timeout_seconds)
         self.last_response_info = {}
+        self.egress_router = egress_router
 
     def chat(self, messages, temperature=0.3):
         url = f"{self.base_url}/chat/completions"
@@ -142,7 +167,9 @@ class OpenAIChatClient(LLMClient):
         last_error = None
         for attempt_index, api_key in enumerate(attempts, 1):
             try:
-                resp = requests.post(
+                resp = _egress_request(
+                    self.egress_router,
+                    "POST",
                     url,
                     headers=_auth_headers(api_key),
                     json=body,
@@ -155,6 +182,7 @@ class OpenAIChatClient(LLMClient):
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                     "quota": extract_modelscope_quota(resp.headers),
                     "attempts": attempt_index,
+                    "egress": _egress_label(self.egress_router),
                 }
                 if resp.status_code < 200 or resp.status_code >= 300:
                     detail = resp.text
@@ -175,6 +203,7 @@ class OpenAIChatClient(LLMClient):
                     "status": "timeout",
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                     "attempts": attempt_index,
+                    "egress": _egress_label(self.egress_router),
                 }
                 last_error = LLMError(f"LLM request timed out after {self.timeout_seconds}s")
                 if attempt_index < len(attempts):
@@ -187,8 +216,9 @@ class OpenAIChatClient(LLMClient):
                     "status": "request_error",
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                     "attempts": attempt_index,
+                    "egress": _egress_label(self.egress_router),
                 }
-                last_error = LLMError(f"LLM network error: {e}")
+                last_error = LLMError(f"LLM network error: {redact_network_text(e)}")
                 if attempt_index < len(attempts):
                     continue
                 raise last_error from e
@@ -203,6 +233,7 @@ class OpenAIResponsesClient(LLMClient):
         base_url: str = "",
         max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
         timeout_seconds: int = DEFAULT_LLM_TIMEOUT_SECONDS,
+        egress_router=None,
     ):
         self.api_key = api_key
         self.model = model
@@ -210,6 +241,7 @@ class OpenAIResponsesClient(LLMClient):
         self.max_tokens = max(0, int(max_tokens or 0))
         self.timeout_seconds = _coerce_timeout_seconds(timeout_seconds)
         self.last_response_info = {}
+        self.egress_router = egress_router
 
     def chat(self, messages, temperature=0.3):
         url = f"{self.base_url}/responses"
@@ -229,7 +261,9 @@ class OpenAIResponsesClient(LLMClient):
         last_error = None
         for attempt_index, api_key in enumerate(attempts, 1):
             try:
-                resp = requests.post(
+                resp = _egress_request(
+                    self.egress_router,
+                    "POST",
                     url,
                     headers=_auth_headers(api_key),
                     json=body,
@@ -242,6 +276,7 @@ class OpenAIResponsesClient(LLMClient):
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                     "quota": extract_modelscope_quota(resp.headers),
                     "attempts": attempt_index,
+                    "egress": _egress_label(self.egress_router),
                 }
                 if resp.status_code < 200 or resp.status_code >= 300:
                     detail = resp.text
@@ -259,6 +294,7 @@ class OpenAIResponsesClient(LLMClient):
                     "status": "timeout",
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                     "attempts": attempt_index,
+                    "egress": _egress_label(self.egress_router),
                 }
                 last_error = LLMError(f"LLM request timed out after {self.timeout_seconds}s")
                 if attempt_index < len(attempts):
@@ -271,8 +307,9 @@ class OpenAIResponsesClient(LLMClient):
                     "status": "request_error",
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                     "attempts": attempt_index,
+                    "egress": _egress_label(self.egress_router),
                 }
-                last_error = LLMError(f"LLM network error: {e}")
+                last_error = LLMError(f"LLM network error: {redact_network_text(e)}")
                 if attempt_index < len(attempts):
                     continue
                 raise last_error from e
@@ -300,6 +337,7 @@ class AnthropicClient(LLMClient):
         base_url: str = "",
         max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
         timeout_seconds: int = DEFAULT_LLM_TIMEOUT_SECONDS,
+        egress_router=None,
     ):
         self.api_key = api_key
         self.model = model
@@ -307,6 +345,7 @@ class AnthropicClient(LLMClient):
         self.max_tokens = max(1, int(max_tokens or DEFAULT_LLM_MAX_TOKENS))
         self.timeout_seconds = _coerce_timeout_seconds(timeout_seconds)
         self.last_response_info = {}
+        self.egress_router = egress_router
 
     def chat(self, messages, temperature=0.3):
         system_msg = ""
@@ -332,7 +371,9 @@ class AnthropicClient(LLMClient):
         last_error = None
         for attempt_index, api_key in enumerate(attempts, 1):
             try:
-                resp = requests.post(
+                resp = _egress_request(
+                    self.egress_router,
+                    "POST",
                     url,
                     headers={
                         "x-api-key": api_key,
@@ -349,6 +390,7 @@ class AnthropicClient(LLMClient):
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                     "quota": extract_modelscope_quota(resp.headers),
                     "attempts": attempt_index,
+                    "egress": _egress_label(self.egress_router),
                 }
                 if resp.status_code < 200 or resp.status_code >= 300:
                     detail = resp.text
@@ -366,6 +408,7 @@ class AnthropicClient(LLMClient):
                     "status": "timeout",
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                     "attempts": attempt_index,
+                    "egress": _egress_label(self.egress_router),
                 }
                 last_error = LLMError(f"LLM request timed out after {self.timeout_seconds}s")
                 if attempt_index < len(attempts):
@@ -378,8 +421,9 @@ class AnthropicClient(LLMClient):
                     "status": "request_error",
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                     "attempts": attempt_index,
+                    "egress": _egress_label(self.egress_router),
                 }
-                last_error = LLMError(f"LLM network error: {e}")
+                last_error = LLMError(f"LLM network error: {redact_network_text(e)}")
                 if attempt_index < len(attempts):
                     continue
                 raise last_error from e
@@ -407,11 +451,24 @@ def create_llm_client(config) -> LLMClient:
     api_type = (getattr(config, "llm_api_type", "") or "").lower()
     max_tokens = getattr(config, "llm_max_tokens", DEFAULT_LLM_MAX_TOKENS)
     timeout_seconds = getattr(config, "llm_timeout_seconds", DEFAULT_LLM_TIMEOUT_SECONDS)
+    provider = (getattr(config, "llm_provider", "") or "").lower()
+    allow_http_endpoint = os.environ.get("ALLOW_INSECURE_CUSTOM_ENDPOINTS", "").strip().lower() in {"1", "true", "yes", "on"}
+    router = EgressRouter(
+        mode=getattr(config, "egress_mode", "auto") or "auto",
+        proxy_ids=getattr(config, "egress_proxy_ids", ()) or (),
+        protect_url=provider == "custom",
+        allow_http_endpoint=allow_http_endpoint,
+    )
+    common = {
+        "max_tokens": max_tokens,
+        "timeout_seconds": timeout_seconds,
+        "egress_router": router,
+    }
     if api_type == "anthropic_messages":
-        return AnthropicClient(config.llm_api_key, config.llm_model, config.llm_base_url, max_tokens=max_tokens, timeout_seconds=timeout_seconds)
+        return AnthropicClient(config.llm_api_key, config.llm_model, config.llm_base_url, **common)
     if api_type == "openai_responses":
-        return OpenAIResponsesClient(config.llm_api_key, config.llm_model, config.llm_base_url, max_tokens=max_tokens, timeout_seconds=timeout_seconds)
-    return OpenAIChatClient(config.llm_api_key, config.llm_model, config.llm_base_url, max_tokens=max_tokens, timeout_seconds=timeout_seconds)
+        return OpenAIResponsesClient(config.llm_api_key, config.llm_model, config.llm_base_url, **common)
+    return OpenAIChatClient(config.llm_api_key, config.llm_model, config.llm_base_url, **common)
 
 
 def _extract_openai_chat_content(payload) -> str:
@@ -433,6 +490,7 @@ def fetch_remote_models(
     base_url: str = "",
     api_key: str = "",
     timeout: float = 8.0,
+    egress_router=None,
 ) -> tuple[list[str], str]:
     """Fetch available models from an LLM provider endpoint.
 
@@ -475,7 +533,7 @@ def fetch_remote_models(
     last_error = ""
     for url in urls_to_try:
         try:
-            resp = requests.get(url, headers=headers, timeout=timeout)
+            resp = _egress_request(egress_router, "GET", url, headers=headers, timeout=timeout)
             if resp.status_code == 200:
                 data = resp.json()
                 raw_items = []
@@ -506,10 +564,10 @@ def fetch_remote_models(
             else:
                 last_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
         except requests.Timeout:
-            last_error = f"Connection timeout to {url}"
+            last_error = f"Connection timeout to endpoint_host={_endpoint_host(url)}"
         except requests.ConnectionError:
-            last_error = f"Connection refused to {url}"
+            last_error = f"Connection refused to endpoint_host={_endpoint_host(url)}"
         except Exception as e:
-            last_error = str(e)
+            last_error = redact_network_text(e)
 
     return [], last_error

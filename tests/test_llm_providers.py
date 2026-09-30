@@ -8,7 +8,7 @@ from paperseek.config import (
     default_base_url,
     default_model,
 )
-from paperseek_core.llm import OpenAIChatClient, format_modelscope_quota
+from paperseek_core.llm import OpenAIChatClient, fetch_remote_models, format_modelscope_quota
 from tests.helpers import read_text, temporary_env
 
 
@@ -84,6 +84,22 @@ class LLMProviderTest(unittest.TestCase):
         self.assertEqual(post.call_args.args[0], "https://api.kimi.com/coding/v1/chat/completions")
         self.assertEqual(post.call_args.kwargs["json"]["temperature"], 0.6)
         self.assertEqual(post.call_args.kwargs["json"]["thinking"], {"type": "disabled"})
+
+    def test_remote_model_network_error_redacts_custom_path(self):
+        import requests
+
+        class FailingRouter:
+            def request(self, method, url, **kwargs):
+                raise requests.ConnectionError("offline")
+
+        models, error = fetch_remote_models(
+            "custom",
+            base_url="https://llm.example.com/tenant-secret/v1",
+            egress_router=FailingRouter(),
+        )
+        self.assertEqual(models, [])
+        self.assertIn("endpoint_host=llm.example.com", error)
+        self.assertNotIn("tenant-secret", error)
 
     def test_openai_chat_rotates_key_pool_on_retryable_status(self):
         class FakeResponse:

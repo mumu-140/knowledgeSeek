@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
+import sys
 import time
+from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
 from paperseek_core.integrations.mosaic_adapter import (
@@ -40,6 +42,89 @@ SOURCE_PROFILES: Dict[str, Tuple[str, ...]] = {
     "general": PROFILE_GENERAL,
 }
 DEFAULT_PROFILE = "general"
+
+
+_MOSAIC_HTTPX_LOCKS_GUARD = Lock()
+_MOSAIC_HTTPX_LOCKS: Dict[str, Lock] = {}
+
+
+def _module_lock(module_name: str) -> Lock:
+    with _MOSAIC_HTTPX_LOCKS_GUARD:
+        return _MOSAIC_HTTPX_LOCKS.setdefault(module_name, Lock())
+
+
+class _RoutedHTTPXClient:
+    """Minimal httpx.Client-compatible facade backed by EgressRouter."""
+
+    def __init__(self, router, original_httpx, *args, **kwargs):
+        self.router = router
+        self.original_httpx = original_httpx
+        self.timeout = kwargs.get("timeout", 30)
+        self.headers = dict(kwargs.get("headers") or {})
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def request(self, method: str, url, **kwargs):
+        headers = dict(self.headers)
+        headers.update(kwargs.pop("headers", {}) or {})
+        timeout = kwargs.pop("timeout", self.timeout)
+        kwargs.pop("follow_redirects", None)
+        return self.router.request(method, str(url), headers=headers, timeout=timeout, **kwargs)
+
+    def get(self, url, **kwargs):
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self.request("POST", url, **kwargs)
+
+    def put(self, url, **kwargs):
+        return self.request("PUT", url, **kwargs)
+
+
+class _HTTPXShim:
+    def __init__(self, router, original_httpx):
+        self._router = router
+        self._original = original_httpx
+        self.URL = original_httpx.URL
+
+    def Client(self, *args, **kwargs):
+        return _RoutedHTTPXClient(self._router, self._original, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+
+class _RoutedMosaicSource:
+    """Route one MOSAIC source through KnowledgeSeek without editing MOSAIC."""
+
+    def __init__(self, source, router):
+        self._source = source
+        self._router = router
+        self.name = source.name
+
+    def __getattr__(self, name):
+        return getattr(self._source, name)
+
+    def available(self):
+        return self._source.available()
+
+    def search(self, *args, **kwargs):
+        module_name = self._source.__class__.__module__
+        module = sys.modules.get(module_name)
+        if module is None or not hasattr(module, "httpx"):
+            return self._source.search(*args, **kwargs)
+        lock = _module_lock(module_name)
+        with lock:
+            original_httpx = module.httpx
+            module.httpx = _HTTPXShim(self._router, original_httpx)
+            try:
+                return self._source.search(*args, **kwargs)
+            finally:
+                module.httpx = original_httpx
 
 # Upstream adapters report failures as free-form text ("HTTP 503: ...",
 # "(429) Too Many Requests"). Match whole 3-digit codes only, so counts such as
@@ -73,12 +158,14 @@ class MosaicFederatedProvider:
         crossref_email: str = "",
         semantic_scholar_api_key: str = "",
         pubmed_api_key: str = "",
+        egress_router=None,
     ):
         profile_key = (profile or "").strip().lower()
         self.profile_name = profile_key if profile_key in SOURCE_PROFILES else DEFAULT_PROFILE
         self.profile = SOURCE_PROFILES[self.profile_name]
         self.max_per_source = max(1, int(max_per_source or 25))
         self.parallel = bool(parallel)
+        self.egress_router = egress_router
 
         common_email = email or ""
         self.openalex_email = openalex_email or common_email
@@ -362,6 +449,8 @@ class MosaicFederatedProvider:
                 setattr(source, "_email", self.openalex_email)
             elif source.name == "Crossref" and self.crossref_email:
                 setattr(source, "_email", self.crossref_email)
+        if self.egress_router is not None:
+            sources = [_RoutedMosaicSource(source, self.egress_router) for source in sources]
         return sources
 
 

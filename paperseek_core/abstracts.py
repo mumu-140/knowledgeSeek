@@ -5,7 +5,8 @@ import requests
 class AbstractFetcher:
     """Fetch abstracts by DOI from Crossref, with in-memory caching."""
 
-    def __init__(self):
+    def __init__(self, egress_router=None):
+        self.egress_router = egress_router
         self._cache: Dict[str, Optional[str]] = {}
 
     def fetch(self, doi: str) -> Optional[str]:
@@ -21,7 +22,11 @@ class AbstractFetcher:
     def _try_crossref(self, doi: str) -> Optional[str]:
         try:
             url = f"https://api.crossref.org/works/{doi}"
-            resp = requests.get(url, timeout=10)
+            resp = (
+                self.egress_router.request("GET", url, timeout=10)
+                if self.egress_router is not None
+                else requests.get(url, timeout=10)
+            )
             resp.raise_for_status()
             msg = resp.json().get("message", {})
             abstract = msg.get("abstract", "")
