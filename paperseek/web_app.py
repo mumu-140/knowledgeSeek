@@ -650,11 +650,15 @@ def discover_llm_models(payload: ModelDiscoveryRequest):
 @app.get("/api/network/egress")
 def network_egress():
     config = AgentConfig.from_env()
+    proxies = proxy_metadata()
+    default_proxy_ids = list(config.egress_proxy_ids)
+    if not default_proxy_ids and config.egress_mode != "direct":
+        default_proxy_ids = [str(item.get("id") or "") for item in proxies if item.get("id")]
     return {
         "modes": list(SUPPORTED_EGRESS_MODES),
         "default_mode": config.egress_mode,
-        "default_proxy_ids": list(config.egress_proxy_ids),
-        "proxies": proxy_metadata(),
+        "default_proxy_ids": default_proxy_ids,
+        "proxies": proxies,
     }
 
 

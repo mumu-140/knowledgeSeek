@@ -233,6 +233,7 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual([item["id"] for item in payload["proxies"]], ["main", "backup"])
+        self.assertEqual(payload["default_proxy_ids"], ["main", "backup"])
         self.assertIn("Main Proxy", response.text)
         self.assertNotIn("proxy-main.example", response.text)
         self.assertNotIn("proxy-backup.example", response.text)
