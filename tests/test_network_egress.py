@@ -99,6 +99,21 @@ class EgressRouterTest(unittest.TestCase):
         self.assertEqual(router.attempted_routes, ["direct"])
         self.assertEqual(len(calls), 1)
 
+    def test_connect_timeout_is_bounded_without_shortening_read_timeout(self):
+        captured = {}
+
+        def fake_get(url, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+            return FakeResponse(200)
+
+        env = dict(self._env())
+        env["EGRESS_CONNECT_TIMEOUT"] = "3"
+        router = EgressRouter(mode="direct", environ=env)
+        with patch("paperseek_core.network.egress.requests.get", side_effect=fake_get):
+            response = router.request("GET", "https://api.example.com/v1", timeout=120)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["timeout"], (3.0, 120.0))
+
     def test_explicit_proxy_selection_uses_only_named_profiles(self):
         router = EgressRouter(mode="proxy", proxy_ids=["backup"], environ=self._env())
         self.assertEqual([item.id for item in router._selected_profiles()], ["backup"])

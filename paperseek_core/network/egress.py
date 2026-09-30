@@ -132,6 +132,7 @@ class EgressRouter:
         self.protect_url = protect_url
         self.allow_http_endpoint = allow_http_endpoint
         self.max_attempts = _int_env(self.environ, "EGRESS_MAX_ATTEMPTS", 4)
+        self.connect_timeout = _int_env(self.environ, "EGRESS_CONNECT_TIMEOUT", 8)
         self.failure_threshold = _int_env(self.environ, "PROXY_FAILURE_THRESHOLD", 3)
         self.cooldown_seconds = _int_env(self.environ, "PROXY_COOLDOWN_SECONDS", 60)
         self.retry_429 = _bool_env(self.environ, "EGRESS_RETRY_429", False)
@@ -161,6 +162,16 @@ class EgressRouter:
             validate_outbound_url(url, allow_http=self.allow_http_endpoint)
         kwargs.pop("proxies", None)
         kwargs["allow_redirects"] = False
+        requested_timeout = kwargs.get("timeout")
+        if isinstance(requested_timeout, (int, float)) and requested_timeout > 0:
+            kwargs["timeout"] = (min(float(requested_timeout), float(self.connect_timeout)), float(requested_timeout))
+        elif isinstance(requested_timeout, (tuple, list)) and len(requested_timeout) == 2:
+            connect_timeout, read_timeout = requested_timeout
+            try:
+                connect_timeout = min(float(connect_timeout), float(self.connect_timeout))
+            except (TypeError, ValueError):
+                connect_timeout = float(self.connect_timeout)
+            kwargs["timeout"] = (connect_timeout, read_timeout)
         last_error = None
         last_response = None
         self.attempted_routes = []
