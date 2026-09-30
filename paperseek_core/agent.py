@@ -10,11 +10,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import count
 from threading import Lock
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 import requests
 
 from paperseek_core.client import Configuration, ApiClient, DocumentsApi
 from paperseek_core.client import ApiException
 from paperseek_core.llm import LLMClient, LLMError, format_modelscope_quota
+from paperseek_core.network import EgressRouter
 from paperseek_core.prompts import (
     SYSTEM_SEARCH_INTENT_ANALYSIS,
     SYSTEM_ARXIV_QUERY_GENERATION,
@@ -513,6 +515,10 @@ class PaperSeekAgent:
     def __init__(self, config, llm_client: LLMClient, abstract_fetcher: Optional[AbstractFetcher] = None):
         self.config = config
         self.llm = llm_client
+        self.egress_router = EgressRouter(
+            mode=getattr(config, "egress_mode", "auto") or "auto",
+            proxy_ids=getattr(config, "egress_proxy_ids", ()) or (),
+        )
         self.abstract_fetcher = abstract_fetcher or AbstractFetcher()
         self.data_source = (getattr(config, "data_source", "wos") or "wos").lower()
         self.discipline_fields = normalize_source_filter_values(
@@ -537,23 +543,25 @@ class PaperSeekAgent:
             self.provider = OpenAlexProvider(
                 api_key=getattr(config, "openalex_api_key", ""),
                 email=getattr(config, "openalex_email", ""),
+                egress_router=self.egress_router,
             )
         elif self.data_source == "crossref":
-            self.provider = CrossrefProvider(email=getattr(config, "crossref_email", ""))
+            self.provider = CrossrefProvider(email=getattr(config, "crossref_email", ""), egress_router=self.egress_router)
         elif self.data_source == "arxiv":
-            self.provider = ArxivProvider()
+            self.provider = ArxivProvider(egress_router=self.egress_router)
         elif self.data_source == "semanticscholar":
-            self.provider = SemanticScholarProvider(api_key=getattr(config, "semantic_scholar_api_key", ""))
+            self.provider = SemanticScholarProvider(api_key=getattr(config, "semantic_scholar_api_key", ""), egress_router=self.egress_router)
         elif self.data_source == "pubmed":
             self.provider = PubMedProvider(
                 api_key=getattr(config, "pubmed_api_key", ""),
                 email=getattr(config, "pubmed_email", ""),
                 tool=getattr(config, "pubmed_tool", "paperseek"),
+                egress_router=self.egress_router,
             )
         elif self.data_source == "googlescholar":
-            self.provider = GoogleScholarSerperProvider(api_key=getattr(config, "serper_api_key", ""))
+            self.provider = GoogleScholarSerperProvider(api_key=getattr(config, "serper_api_key", ""), egress_router=self.egress_router)
         elif self.data_source == "paperhub":
-            self.provider = PaperHubProvider()
+            self.provider = PaperHubProvider(egress_router=self.egress_router)
         elif self.data_source == "federated":
             from paperseek_core.integrations.mosaic_provider import MosaicFederatedProvider
 
@@ -1575,7 +1583,7 @@ class PaperSeekAgent:
         last_error = None
         for attempt_index, key in enumerate(attempts, 1):
             try:
-                response = requests.post(url, headers=headers_factory(key), json=payload, timeout=timeout)
+                response = self.egress_router.request("POST", url, headers=headers_factory(key), json=payload, timeout=timeout)
             except requests.RequestException as exc:
                 last_error = exc
                 if attempt_index < len(attempts):
@@ -1594,7 +1602,7 @@ class PaperSeekAgent:
             return response
         if last_error:
             raise last_error
-        return requests.post(url, headers=headers_factory(""), json=payload, timeout=timeout)
+        return self.egress_router.request("POST", url, headers=headers_factory(""), json=payload, timeout=timeout)
 
     def _embedding_vectors(self, base_url: str, api_key: str, model: str, texts: list, provider: str = "") -> List[List[float]]:
         if (provider or "").strip().lower() == "nvidia":
@@ -2215,25 +2223,37 @@ class PaperSeekAgent:
             return f"{self._source_label()} {method} {url} -> HTTP {status} OK{elapsed_text}{attempts_text}; total={total}; returned={count}."
         return f"WoS Starter GET /documents completed; total={total}; returned={count}."
 
+    @staticmethod
+    def _safe_endpoint_host(value: str) -> str:
+        try:
+            parsed = urlsplit(str(value or ""))
+            host = parsed.hostname or ""
+            if not host:
+                return "configured-endpoint"
+            port = parsed.port
+            return f"{host}:{port}" if port else host
+        except Exception:
+            return "configured-endpoint"
+
     def _llm_request_log(self, purpose: str) -> None:
         base_url = getattr(self.llm, "base_url", "")
         model = self._display_llm_model(getattr(self.llm, "model", ""))
         provider = getattr(self.config, "llm_provider", "llm")
         api_type = getattr(self.config, "llm_api_type", "")
-        self._emit_log(f"LLM request started: provider={provider} api_type={api_type} model={model} purpose={purpose} endpoint={base_url}.")
+        host = self._safe_endpoint_host(base_url)
+        mode = getattr(self.config, "egress_mode", "auto") or "auto"
+        self._emit_log(f"LLM request started: provider={provider} api_type={api_type} model={model} purpose={purpose} endpoint_host={host} egress={mode}.")
 
     def _llm_response_log(self, purpose: str) -> None:
         info = getattr(self.llm, "last_response_info", {}) or {}
         method = info.get("method", "POST")
-        url = str(info.get("url", "")).split("?")[0] or "LLM endpoint"
+        host = self._safe_endpoint_host(info.get("url", ""))
         status = info.get("status", "completed")
         elapsed = info.get("elapsed_ms")
         elapsed_text = f" in {elapsed}ms" if elapsed is not None else ""
         status_text = f"HTTP {status} OK" if isinstance(status, int) and status < 400 else str(status)
-        self._emit_log(f"LLM {method} {url} -> {status_text}{elapsed_text}; purpose={purpose}.")
-        route_label = info.get("fallback_route")
-        if route_label:
-            self._emit_log(f"LLM route used: {route_label}.")
+        route_label = info.get("egress") or "unknown"
+        self._emit_log(f"LLM {method} endpoint_host={host} -> {status_text}{elapsed_text}; purpose={purpose}; egress={route_label}.")
         quota = info.get("quota") or {}
         quota_text = format_modelscope_quota(quota)
         if quota_text:

@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from paperseek.disciplines import normalize_source_filter_values
 from paperseek.source_metadata import supported_source_ids
 
+SUPPORTED_EGRESS_MODES = ("direct", "proxy", "pool", "auto")
+
 
 def _int_env(name: str, default: int, minimum: int = 0) -> int:
     raw = os.environ.get(name)
@@ -65,6 +67,8 @@ class AgentConfig:
     retrieval_reranker_base_url: str = ""
     retrieval_reranker_api_key: str = ""
     retrieval_crossref_enrichment: bool = False
+    egress_mode: str = "auto"
+    egress_proxy_ids: tuple[str, ...] = field(default_factory=tuple)
 
     @classmethod
     def from_env(cls) -> "AgentConfig":
@@ -118,6 +122,8 @@ class AgentConfig:
             retrieval_reranker_base_url=os.environ.get("RETRIEVAL_RERANKER_BASE_URL", ""),
             retrieval_reranker_api_key=os.environ.get("RETRIEVAL_RERANKER_API_KEY", ""),
             retrieval_crossref_enrichment=os.environ.get("RETRIEVAL_CROSSREF_ENRICHMENT", "").lower() in ("1", "true", "yes"),
+            egress_mode=(os.environ.get("EGRESS_MODE", "auto") or "auto").strip().lower(),
+            egress_proxy_ids=tuple(item.strip().lower() for item in os.environ.get("EGRESS_PROXY_IDS", "").split(",") if item.strip()),
         )
 
     def validate(self):
@@ -134,6 +140,11 @@ class AgentConfig:
         self.llm_api_type = (self.llm_api_type or default_api_type(self.llm_provider)).lower()
         if not self.llm_api_key and self.llm_provider != "ollama":
             missing.append("LLM_API_KEY")
+        if self.llm_provider == "custom" and not (self.llm_base_url or "").strip():
+            missing.append("LLM_BASE_URL")
+        self.egress_mode = (self.egress_mode or "auto").strip().lower()
+        if self.egress_mode not in SUPPORTED_EGRESS_MODES:
+            raise ValueError(f"EGRESS_MODE must be one of {', '.join(SUPPORTED_EGRESS_MODES)}, got '{self.egress_mode}'")
         if self.llm_provider not in SUPPORTED_LLM_PROVIDERS:
             raise ValueError(f"LLM_PROVIDER must be one of {', '.join(SUPPORTED_LLM_PROVIDERS)}, got '{self.llm_provider}'")
         if self.llm_api_type not in SUPPORTED_LLM_API_TYPES:

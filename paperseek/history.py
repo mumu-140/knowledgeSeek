@@ -1,4 +1,5 @@
 from __future__ import annotations
+from urllib.parse import urlsplit
 
 import json
 import os
@@ -154,14 +155,28 @@ def redact_secrets(value: Any) -> Any:
     return value
 
 
+def _safe_endpoint_host(value: str) -> str:
+    try:
+        parsed = urlsplit(str(value or ""))
+        host = parsed.hostname or ""
+        if not host:
+            return ""
+        return f"{host}:{parsed.port}" if parsed.port else host
+    except (TypeError, ValueError):
+        return ""
+
+
 def safe_search_params_from_config(config: AgentConfig) -> dict[str, Any]:
-    """Persist only run-shaping settings, never raw user credentials."""
+    """Persist only run-shaping settings, never raw user credentials or endpoint paths."""
     return {
         "data_source": config.data_source,
         "llm_provider": config.llm_provider,
         "llm_api_type": config.llm_api_type,
         "llm_model": config.llm_model,
-        "llm_base_url": config.llm_base_url,
+        "llm_endpoint_host": _safe_endpoint_host(config.llm_base_url),
+        "has_custom_endpoint": bool(config.llm_provider == "custom" and config.llm_base_url),
+        "egress_mode": getattr(config, "egress_mode", "auto"),
+        "egress_proxy_ids": list(getattr(config, "egress_proxy_ids", ()) or ()),
         "llm_max_tokens": getattr(config, "llm_max_tokens", 2048),
         "wos_db": config.wos_db,
         "search_field": config.search_field,
