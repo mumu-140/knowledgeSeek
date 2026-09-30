@@ -16,7 +16,7 @@ import requests
 from paperseek_core.client import Configuration, ApiClient, DocumentsApi
 from paperseek_core.client import ApiException
 from paperseek_core.llm import LLMClient, LLMError, format_modelscope_quota
-from paperseek_core.network import EgressRouter
+from paperseek_core.network import EgressRouter, redact_network_text
 from paperseek_core.prompts import (
     SYSTEM_SEARCH_INTENT_ANALYSIS,
     SYSTEM_ARXIV_QUERY_GENERATION,
@@ -1587,7 +1587,7 @@ class PaperSeekAgent:
             except requests.RequestException as exc:
                 last_error = exc
                 if attempt_index < len(attempts):
-                    self._emit_log(f"{label} request failed; retrying with another key ({attempt_index}/{len(attempts)}): {exc}")
+                    self._emit_log(f"{label} request failed; retrying with another key ({attempt_index}/{len(attempts)}): {redact_network_text(exc)}")
                     continue
                 raise
             if (

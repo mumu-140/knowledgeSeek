@@ -5,6 +5,8 @@ from html import unescape
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import re
 import requests
+
+from paperseek_core.network import redact_network_text
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -116,10 +118,7 @@ class ProviderError(Exception):
 
 
 def _redact_request_text(value: object) -> str:
-    text = str(value or "")
-    if not text:
-        return ""
-    return re.sub(r"([?&](?:api_key|apikey|key|token|access_token)=)[^&\s)]+", r"\1<redacted>", text, flags=re.I)
+    return redact_network_text(value)
 
 
 def reconstruct_abstract(inverted_index: Optional[Dict[str, List[int]]]) -> str:

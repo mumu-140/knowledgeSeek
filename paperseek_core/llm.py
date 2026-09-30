@@ -9,7 +9,7 @@ import requests
 from threading import Lock
 import time
 
-from paperseek_core.network import EgressRouter
+from paperseek_core.network import EgressRouter, redact_network_text
 
 
 class LLMError(Exception):
@@ -208,7 +208,7 @@ class OpenAIChatClient(LLMClient):
                     "attempts": attempt_index,
                     "egress": _egress_label(self.egress_router),
                 }
-                last_error = LLMError(f"LLM network error: {e}")
+                last_error = LLMError(f"LLM network error: {redact_network_text(e)}")
                 if attempt_index < len(attempts):
                     continue
                 raise last_error from e
@@ -299,7 +299,7 @@ class OpenAIResponsesClient(LLMClient):
                     "attempts": attempt_index,
                     "egress": _egress_label(self.egress_router),
                 }
-                last_error = LLMError(f"LLM network error: {e}")
+                last_error = LLMError(f"LLM network error: {redact_network_text(e)}")
                 if attempt_index < len(attempts):
                     continue
                 raise last_error from e
@@ -413,7 +413,7 @@ class AnthropicClient(LLMClient):
                     "attempts": attempt_index,
                     "egress": _egress_label(self.egress_router),
                 }
-                last_error = LLMError(f"LLM network error: {e}")
+                last_error = LLMError(f"LLM network error: {redact_network_text(e)}")
                 if attempt_index < len(attempts):
                     continue
                 raise last_error from e
@@ -558,6 +558,6 @@ def fetch_remote_models(
         except requests.ConnectionError:
             last_error = f"Connection refused to {url}"
         except Exception as e:
-            last_error = str(e)
+            last_error = redact_network_text(e)
 
     return [], last_error

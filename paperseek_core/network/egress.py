@@ -14,6 +14,17 @@ from paperseek_core.network.url_policy import validate_outbound_url
 
 
 EGRESS_MODES = ("direct", "proxy", "pool", "auto")
+_URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@\s]+)@", re.I)
+_SECRET_QUERY_RE = re.compile(r"([?&](?:api[_-]?key|apikey|key|token|access[_-]?token|password|secret)=)[^&\s)]+", re.I)
+
+
+def redact_network_text(value: object) -> str:
+    """Redact credentials from network errors before they reach logs/UI."""
+    text = str(value or "")
+    if not text:
+        return ""
+    text = _URL_USERINFO_RE.sub(r"\1<redacted>@", text)
+    return _SECRET_QUERY_RE.sub(r"\1<redacted>", text)
 _PROXY_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 _HEALTH_LOCK = Lock()
 _FAILURES: dict[str, int] = {}

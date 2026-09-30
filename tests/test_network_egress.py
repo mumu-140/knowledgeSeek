@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import requests
 
-from paperseek_core.network.egress import EgressRouter, load_proxy_profiles
+from paperseek_core.network.egress import EgressRouter, load_proxy_profiles, redact_network_text
 from paperseek_core.network.url_policy import EndpointPolicyError, validate_outbound_url
 
 
@@ -14,6 +14,18 @@ class FakeResponse:
         self.status_code = status_code
         self.headers = {}
         self.text = ""
+
+
+class NetworkRedactionTest(unittest.TestCase):
+    def test_proxy_credentials_and_query_secrets_are_redacted(self):
+        raw = "ProxyError via http://alice:s3cr3t@proxy.example:8080/path?api_key=abc123&token=xyz"
+        safe = redact_network_text(raw)
+        self.assertNotIn("alice", safe)
+        self.assertNotIn("s3cr3t", safe)
+        self.assertNotIn("abc123", safe)
+        self.assertNotIn("xyz", safe)
+        self.assertIn("proxy.example:8080", safe)
+        self.assertIn("<redacted>", safe)
 
 
 class URLPolicyTest(unittest.TestCase):
