@@ -8,6 +8,7 @@ import re
 import requests
 from threading import Lock
 import time
+from urllib.parse import urlsplit
 
 from paperseek_core.network import EgressRouter, redact_network_text
 
@@ -95,6 +96,15 @@ def _egress_request(router, method: str, url: str, **kwargs):
 
 def _egress_label(router) -> str:
     return getattr(router, "last_route", "") if router is not None else ""
+
+
+def _endpoint_host(url: str) -> str:
+    try:
+        parsed = urlsplit(str(url or ""))
+        host = parsed.hostname or "configured-endpoint"
+        return f"{host}:{parsed.port}" if parsed.port else host
+    except Exception:
+        return "configured-endpoint"
 
 
 MODELSCOPE_QUOTA_HEADERS = {
@@ -554,9 +564,9 @@ def fetch_remote_models(
             else:
                 last_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
         except requests.Timeout:
-            last_error = f"Connection timeout to {url}"
+            last_error = f"Connection timeout to endpoint_host={_endpoint_host(url)}"
         except requests.ConnectionError:
-            last_error = f"Connection refused to {url}"
+            last_error = f"Connection refused to endpoint_host={_endpoint_host(url)}"
         except Exception as e:
             last_error = redact_network_text(e)
 
