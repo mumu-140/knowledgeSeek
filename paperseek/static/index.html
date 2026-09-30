@@ -340,7 +340,31 @@
                 </div>
               </div>
 
-              <!-- Group 5: Source-specific -->
+              <!-- Group 5: Network egress -->
+              <div class="config-group">
+                <div class="config-group-header">
+                  <div class="config-group-title">Network egress</div>
+                  <small>Direct connection or server-managed proxy failover</small>
+                </div>
+                <div class="field-grid">
+                  <label class="field">
+                    <span>Connection Mode</span>
+                    <select id="egressMode">
+                      <option value="auto" selected>Auto: Direct -> Proxy Pool</option>
+                      <option value="direct">Direct only</option>
+                      <option value="proxy">Selected proxies</option>
+                      <option value="pool">Proxy pool</option>
+                    </select>
+                  </label>
+                  <div class="field">
+                    <span>Proxy Routes</span>
+                    <div id="egressProxyOptions" class="discipline-options"></div>
+                    <small id="egressStatus" class="field-subnote">Loading server-managed routes...</small>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Group 6: Source-specific -->
               <div class="config-group">
                 <div class="config-group-header">
                   <div class="config-group-title">Source-specific</div>

@@ -35,6 +35,8 @@ const PERSISTED_CONFIG_KEYS = [
   "llm_provider",
   "llm_model",
   "llm_api_type",
+  "egress_mode",
+  "egress_proxy_ids",
   "expand_citations",
   "fetch_abstracts",
   "search_field",
@@ -77,6 +79,9 @@ function pickPersistableConfig(config) {
   return clean;
 }
 const baseUrlInput = document.getElementById("llmBaseUrl");
+const egressModeSelect = document.getElementById("egressMode");
+const egressProxyOptions = document.getElementById("egressProxyOptions");
+const egressStatus = document.getElementById("egressStatus");
 const retrievalEmbeddingProviderSelect = document.getElementById("retrievalEmbeddingProvider");
 const retrievalEmbeddingModelInput = document.getElementById("retrievalEmbeddingModel");
 const retrievalEmbeddingBaseUrlInput = document.getElementById("retrievalEmbeddingBaseUrl");
@@ -542,11 +547,24 @@ async function handleFetchModels() {
   }
 
   try {
-    const res = await fetch(`/api/llm/models?provider=${encodeURIComponent(provider)}`);
+    const isCustom = provider === "custom";
+    const res = isCustom
+      ? await fetch("/api/llm/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "custom",
+            base_url: getValue("llmBaseUrl"),
+            api_key: getValue("llmApiKey"),
+            egress_mode: egressModeSelect ? egressModeSelect.value : "auto",
+            egress_proxy_ids: selectedEgressProxyIds(),
+          }),
+        })
+      : await fetch(`/api/llm/models?provider=${encodeURIComponent(provider)}`);
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
+      throw new Error(responseErrorMessage(data, res.status));
     }
-    const data = await res.json();
     const models = data.models || [];
     updateModelDatalist(models);
 
@@ -1227,6 +1245,40 @@ function updateCredentialPlaceholders() {
 }
 
 
+function selectedEgressProxyIds() {
+  if (!egressProxyOptions) return [];
+  return [...egressProxyOptions.querySelectorAll('input[type="checkbox"]:checked')].map((node) => node.value);
+}
+
+function applyEgressProxySelection(ids) {
+  if (!egressProxyOptions) return;
+  const wanted = new Set(Array.isArray(ids) ? ids : []);
+  egressProxyOptions.querySelectorAll('input[type="checkbox"]').forEach((node) => {
+    node.checked = wanted.has(node.value);
+  });
+}
+
+async function loadEgressOptions() {
+  if (!egressModeSelect || !egressProxyOptions) return;
+  try {
+    const response = await fetch("/api/network/egress");
+    const data = await response.json();
+    if (!response.ok) throw new Error(responseErrorMessage(data, response.status));
+    egressModeSelect.value = data.default_mode || "auto";
+    egressProxyOptions.innerHTML = "";
+    (data.proxies || []).forEach((proxy) => {
+      const label = document.createElement("label");
+      label.className = "discipline-option";
+      label.innerHTML = `<input type="checkbox" value="${escapeHtml(proxy.id)}"><span>${escapeHtml(proxy.label || proxy.id)} (${escapeHtml(proxy.status || "ready")})</span>`;
+      egressProxyOptions.appendChild(label);
+    });
+    applyEgressProxySelection(data.default_proxy_ids || []);
+    if (egressStatus) egressStatus.textContent = (data.proxies || []).length ? `${data.proxies.length} server-managed route(s)` : "No server proxy configured; Direct/Auto use direct only.";
+  } catch (error) {
+    if (egressStatus) egressStatus.textContent = `Network routes unavailable: ${error.message}`;
+  }
+}
+
 function notifyConfigSaved(isSaved) {
   if (configSavedBadge) {
     if (isSaved) {
@@ -1260,6 +1312,8 @@ function saveUserConfigToLocal() {
         llm_provider: getValue("llmProvider"),
         llm_model: getValue("llmModel"),
         llm_api_type: getValue("llmApiType"),
+        egress_mode: egressModeSelect ? egressModeSelect.value : "auto",
+        egress_proxy_ids: selectedEgressProxyIds(),
         expand_citations: document.getElementById("expandCitations") ? document.getElementById("expandCitations").checked : true,
         fetch_abstracts: document.getElementById("fetchAbstracts") ? document.getElementById("fetchAbstracts").checked : false,
         search_field: getValue("searchField"),
@@ -1338,6 +1392,12 @@ function restoreUserConfigFromLocal() {
     if (config.llm_model && modelInput) {
       modelInput.value = config.llm_model;
     }
+    if (config.egress_mode && egressModeSelect) {
+      egressModeSelect.value = config.egress_mode;
+    }
+    if (Array.isArray(config.egress_proxy_ids)) {
+      applyEgressProxySelection(config.egress_proxy_ids);
+    }
     // NOTE: llm_base_url and every *_api_key field are intentionally NOT restored.
     // Secrets are never persisted, so they are never read back into inputs.
     if (document.getElementById("expandCitations") && config.expand_citations !== undefined) {
@@ -1405,6 +1465,7 @@ async function loadServerDefaults() {
     if (data.llm_base_url) {
       baseUrlInput.value = data.llm_base_url;
     }
+    updateBaseUrlEditability();
     if (Number.isFinite(Number(data.target_min))) {
       document.getElementById("targetMin").value = Number(data.target_min);
     }
@@ -3108,6 +3169,8 @@ function buildPayload() {
     llm_api_type: getValue("llmApiType"),
     llm_model: getValue("llmModel"),
     llm_base_url: getValue("llmBaseUrl"),
+    egress_mode: egressModeSelect ? egressModeSelect.value : "auto",
+    egress_proxy_ids: selectedEgressProxyIds(),
     retrieval_embedding_provider: getValue("retrievalEmbeddingProvider") || "local",
     retrieval_embedding_model: getValue("retrievalEmbeddingModel"),
     retrieval_embedding_base_url: getValue("retrievalEmbeddingBaseUrl"),
@@ -3239,11 +3302,22 @@ function handleStreamEvent(event) {
   }
 }
 
+function updateBaseUrlEditability() {
+  if (!baseUrlInput || !providerSelect) return;
+  const custom = providerSelect.value === "custom";
+  baseUrlInput.readOnly = !custom;
+  baseUrlInput.setAttribute("aria-readonly", custom ? "false" : "true");
+  baseUrlInput.title = custom
+    ? "Custom endpoints are session-only and validated server-side before use."
+    : "Known providers use a trusted fixed endpoint; choose Custom to enter another URL.";
+}
+
 function applyProviderDefaults() {
   const defaults = providerDefaults[providerSelect.value] || providerDefaults.custom;
   apiTypeSelect.value = defaults.apiType;
   modelInput.value = defaults.model;
   baseUrlInput.value = defaults.baseUrl;
+  updateBaseUrlEditability();
   updateModelDatalist(providerModelPresets[providerSelect.value] || []);
   if (fetchModelsFeedback) {
     fetchModelsFeedback.textContent = "";
@@ -3266,6 +3340,12 @@ function applyRetrievalProviderDefaults(kind) {
   const defaults = retrievalProviderDefaults[select.value] || retrievalProviderDefaults.custom;
   modelInputElement.value = isReranker ? defaults.rerankerModel : defaults.embeddingModel;
   baseUrlInputElement.value = isReranker ? (defaults.rerankerBaseUrl || defaults.baseUrl) : (defaults.embeddingBaseUrl || defaults.baseUrl);
+  const custom = select.value === "custom";
+  baseUrlInputElement.readOnly = !custom;
+  baseUrlInputElement.setAttribute("aria-readonly", custom ? "false" : "true");
+  baseUrlInputElement.title = custom
+    ? "Custom endpoints are session-only and validated server-side before use."
+    : "Known providers use a trusted fixed endpoint; choose Custom to enter another URL.";
 }
 
 if (retrievalEmbeddingProviderSelect) {
@@ -3610,6 +3690,7 @@ async function initializeApp() {
   applyRetrievalProviderDefaults("embedding");
   applyRetrievalProviderDefaults("reranker");
   await loadDisciplineOptions();
+  await loadEgressOptions();
   await loadServerDefaults();
   updateSourceSummary();
   updateExportButtons();
